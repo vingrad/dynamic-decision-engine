@@ -1,0 +1,23 @@
+{
+  "domain": "investing",
+  "objective": "Build a thesis-driven position in ACME over the next year",
+  "metric": "calibrated thesis conviction",
+  "target": "a sized position with explicit invalidation criteria",
+  "context": {
+    "situation": "ACME trades at a discount to normalised earnings after a transient demand air-pocket.",
+    "facts": [
+      "Balance sheet is net-cash",
+      "Management has a credible margin-recovery plan"
+    ],
+    "assets": [
+      { "name": "ACME", "kind": "ticker", "description": "Primary thesis instrument" },
+      { "name": "sector research edge", "kind": "edge", "description": "Deep channel checks in ACME's end market" },
+      { "name": "investable capital", "kind": "capital" }
+    ],
+    "constraints": [
+      { "name": "max 10% drawdown on this position", "kind": "drawdown_limit" },
+      { "name": "moderate risk tolerance", "kind": "risk_tolerance" },
+      { "name": "2 year horizon", "kind": "time_horizon" }
+    ]
+  }
+}

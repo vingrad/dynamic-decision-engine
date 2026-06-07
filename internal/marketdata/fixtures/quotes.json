@@ -1,0 +1,11 @@
+{
+  "ACME": [
+    { "ticker": "ACME", "price": 100.0, "avg_dollar_volume": 50000000, "as_of": "2026-01-02T00:00:00Z" },
+    { "ticker": "ACME", "price": 108.0, "avg_dollar_volume": 52000000, "as_of": "2026-02-02T00:00:00Z" },
+    { "ticker": "ACME", "price": 92.0, "avg_dollar_volume": 60000000, "as_of": "2026-03-02T00:00:00Z" }
+  ],
+  "GLOBEX": [
+    { "ticker": "GLOBEX", "price": 40.0, "avg_dollar_volume": 8000000, "as_of": "2026-01-02T00:00:00Z" },
+    { "ticker": "GLOBEX", "price": 41.5, "avg_dollar_volume": 8200000, "as_of": "2026-02-02T00:00:00Z" }
+  ]
+}

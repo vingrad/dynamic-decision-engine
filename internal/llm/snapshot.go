@@ -12,6 +12,7 @@ import (
 // decision. Hashing only these fields (not IDs or timestamps) keeps the snapshot
 // id stable across runs for equivalent decisions.
 type snapshotInput struct {
+	Domain     string         `json:"domain,omitempty"`
 	Objective  string         `json:"objective"`
 	Metric     string         `json:"metric"`
 	Target     string         `json:"target"`
@@ -24,6 +25,7 @@ type snapshotInput struct {
 // provenance is consistent regardless of backend.
 func inputSnapshotID(g domain.Goal, signalNote string) string {
 	snap := snapshotInput{
+		Domain:     g.Domain,
 		Objective:  g.Objective,
 		Metric:     g.Metric,
 		Target:     g.Target,

@@ -49,7 +49,7 @@ func TestReplanMaterialOnSignal(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	res, err := e.Replan(ctx, testGoal(), current, "competitor: launched free tier")
+	res, err := e.Replan(ctx, testGoal(), current, "competitor: launched free tier", "competitor", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +71,7 @@ func TestReplanImmaterialWithoutChange(t *testing.T) {
 	current, _ := e.GenerateInitialPlan(ctx, testGoal())
 	// Replanning with no signal note reproduces the same moves, so it should not
 	// be considered material.
-	res, err := e.Replan(ctx, testGoal(), current, "")
+	res, err := e.Replan(ctx, testGoal(), current, "", "", nil)
 	if err != nil {
 		t.Fatal(err)
 	}

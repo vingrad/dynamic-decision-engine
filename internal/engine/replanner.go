@@ -25,14 +25,14 @@ type ReplanResult struct {
 // the signal folded into the planner input, then asks the evaluator whether the
 // change is material. The current plan version is never mutated — when the change
 // is material a new version (N+1) is produced for the caller to persist.
-func (e *Engine) Replan(ctx context.Context, goal domain.Goal, current domain.PlanVersion, signalNote string) (ReplanResult, error) {
-	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote})
+func (e *Engine) Replan(ctx context.Context, goal domain.Goal, current domain.PlanVersion, signalNote, signalKind string, signalPayload map[string]any) (ReplanResult, error) {
+	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote, SignalKind: signalKind, SignalPayload: signalPayload})
 	if err != nil {
 		return ReplanResult{}, fmt.Errorf("engine: replan: %w", err)
 	}
 
 	candidate := e.buildVersion(current.PlanID, current.Version+1, goal, res)
-	material, reason := e.evaluator.IsMaterial(current.RankedMoves, candidate.RankedMoves)
+	material, reason := e.evaluatorFor(goal).IsMaterial(current.RankedMoves, candidate.RankedMoves)
 
 	return ReplanResult{
 		Material:  material,

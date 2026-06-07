@@ -1,0 +1,129 @@
+# Domains & Domain Packs
+
+The engine is multi-domain: every goal carries a `domain`, and a **domain pack**
+decides how that goal is reasoned about — its prompt guidance, its materiality
+threshold, its scoring tunables, its vocabulary and its validation.
+
+Adding a domain is a single descriptor plus one registration; no other code
+changes. This is possible because packs are **pure data** (`internal/pack`) and a
+composition layer (`internal/wire`) turns them into the running collaborators:
+
+- an `llm.PlannerRouter` that dispatches to a per-domain planner, and
+- an `engine.EvaluatorResolver` that selects the per-domain materiality policy.
+
+```
+goal.Domain ─► PlannerRouter ─► Guided(Caching(base))  | Caching(FinancePlanner)
+            └► EvaluatorResolver ─► ThresholdEvaluator{ConfidenceDelta}
+```
+
+## Shipped packs
+
+| Domain      | Materiality Δ | Planner                       | Notes |
+|-------------|---------------|-------------------------------|-------|
+| `generic`   | 0.10          | base model (mock/anthropic)   | Default. Empty prompt template → identical to pre-multi-domain behaviour. |
+| `investing` | 0.05          | numeric **finance** planner   | Thesis framing, calibrated conviction, **not financial advice** disclaimer. |
+| `growth`    | 0.10          | base model + growth guidance  | Growth experiments / funnel metrics. |
+| `career`    | 0.10          | base model + career guidance  | Positioning bets, bandwidth-aware. |
+
+The canonical stored value for the default domain is the empty string; both `""`
+and `"generic"` resolve to the generic pack, and generic goals serialise/hash
+exactly as before.
+
+## Selecting a domain
+
+Set `domain` when creating a goal or evaluating:
+
+```bash
+dde evaluate --input examples/investing-thesis.json   # "domain": "investing"
+```
+
+```http
+POST /v1/goals     { "domain": "investing", "objective": "...", "context": {...} }
+POST /v1/evaluate  { "domain": "investing", "objective": "...", "context": {...} }
+```
+
+Unknown domains are rejected with the list of valid domains. Each pack also runs
+soft validation (e.g. investing warns when no risk/horizon context is given);
+warnings are logged, they do not block.
+
+## The investing domain
+
+- Moves are framed as falsifiable theses with entry/exit and thesis-invalidation
+  kill criteria.
+- The optional **numeric finance planner** scores candidate theses (tickers given
+  as context assets with `kind: "ticker"`) on expected value, risk
+  (volatility/drawdown), liquidity and horizon fit, and suggests an illustrative
+  fractional-Kelly position size bounded by a risk budget.
+- **Honesty:** confidence is a transparent transform of the composite score, **not**
+  a market probability; sizing is illustrative; this is decision support, not a
+  trading system. The plan summary always carries: *"Educational decision-support
+  only. Not financial advice. Not a recommendation to buy or sell any security."*
+
+### Structured signals
+
+Investing signals carry typed payloads in `signal.payload`, parsed by
+`internal/finance`:
+
+| `kind`             | payload fields |
+|--------------------|----------------|
+| `price_move`       | `pct_change, from_price, to_price, window_days` |
+| `earnings`         | `eps_actual, eps_estimate, surprise` |
+| `macro`            | `indicator, value, prior` |
+| `valuation_change` | `metric, value, fair_value, gap_pct` |
+| `thesis_break`     | `reason, broken_level, hard` |
+
+A `thesis_break` for a held ticker zeroes that thesis's confidence, which the
+standard materiality evaluator picks up as a material change → a new plan version.
+
+## Market data (point-in-time)
+
+The finance planner reads market data through `internal/marketdata.Provider`.
+Every read takes an `asOf` timestamp and returns only data known at or before it —
+so backtests cannot peek at the future. The default `OfflineProvider` serves
+embedded JSON fixtures (no network, CI-safe); a real HTTP vendor is stubbed behind
+the same interface. Select with `DDE_MARKETDATA_PROVIDER=offline|http`.
+
+## Policy (config-as-data)
+
+Pack defaults can be overridden per domain by a policy file (`DDE_POLICY`,
+JSON/YAML):
+
+```json
+{
+  "domains": {
+    "investing": {
+      "confidence_delta": 0.03,
+      "scoring": {
+        "weights": { "ev": 0.4, "risk": 0.4, "liquidity": 0.1, "horizon": 0.1 },
+        "risk":    { "max_portfolio_risk_pct": 0.01, "max_position_pct": 0.10, "kelly_fraction": 0.2 }
+      }
+    }
+  }
+}
+```
+
+## Async replanning
+
+In `serve`, set `DDE_REPLAN_ASYNC=true` to process replanning on a background
+worker pool. `POST /v1/signals` then returns **202** with `status: "pending"`;
+poll `GET /v1/plans/{id}/versions` for the new version. Bursts of signals for one
+plan are coalesced, and a snapshot-keyed plan cache makes duplicate work cheap.
+The default is synchronous (inline) so the CLI and existing clients are unchanged.
+
+## Backtesting
+
+`dde backtest --input scenario.json` replays a timeline of signals through the
+evaluate/replan loop and reports **decision/replanning quality** (kill
+precision/recall, versions created) — not a tradeable strategy return. The
+`hypothetical_pnl` figure is illustrative only. Market data is evaluated as of each
+event's timestamp (no lookahead).
+
+## Adding a new domain
+
+1. Add `internal/pack/<name>.go` returning a `Descriptor` (id, version, prompt
+   template, evaluator config, optional scoring, vocabulary, validation).
+2. Register it in `NewRegistry()`.
+
+That's it — the router, evaluator resolver, validation and API all pick it up.
+For a domain that needs a custom planner (like investing's numeric one), add a
+case in `internal/wire/planner.go`.

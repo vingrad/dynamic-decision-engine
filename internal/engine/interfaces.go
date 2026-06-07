@@ -14,3 +14,11 @@ type Evaluator interface {
 	// a short human-readable reason suitable for provenance/audit logs.
 	IsMaterial(current, candidate []domain.RankedMove) (material bool, reason string)
 }
+
+// EvaluatorResolver selects the materiality policy for a goal's domain. It is
+// declared here (rather than importing the pack registry) so the engine stays free
+// of a pack dependency; the wiring layer builds a resolver from pack descriptors
+// and injects it via WithEvaluatorResolver.
+type EvaluatorResolver interface {
+	EvaluatorFor(domainKey string) Evaluator
+}

@@ -9,6 +9,7 @@ package storage
 
 import (
 	"context"
+	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
@@ -64,7 +65,11 @@ type Repository interface {
 
 	// Signals
 	CreateSignal(ctx context.Context, s *domain.Signal) error
+	GetSignal(ctx context.Context, id string) (domain.Signal, error)
 	ListSignals(ctx context.Context, goalID string, page Page) ([]domain.Signal, error)
+	// MarkSignalProcessed records the terminal status of the replan a signal
+	// triggered (applied|unchanged|failed), making async outcomes queryable.
+	MarkSignalProcessed(ctx context.Context, id, status string, resultVersion int, reason, errMsg string, at time.Time) error
 
 	// Outcomes
 	CreateOutcome(ctx context.Context, o *domain.Outcome) error

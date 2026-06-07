@@ -17,6 +17,7 @@ const maxBodyBytes = 1 << 20 // 1 MiB
 // CreateGoalRequest is the body for POST /v1/goals.
 type CreateGoalRequest struct {
 	PlayerID  string         `json:"player_id"`
+	Domain    string         `json:"domain"`
 	Objective string         `json:"objective"`
 	Metric    string         `json:"metric"`
 	Target    string         `json:"target"`
@@ -43,6 +44,7 @@ type CreateOutcomeRequest struct {
 // EvaluateRequest is the body for POST /v1/evaluate: a self-contained goal plus
 // an optional signal note. It is stateless — nothing is persisted.
 type EvaluateRequest struct {
+	Domain     string         `json:"domain"`
 	Objective  string         `json:"objective"`
 	Metric     string         `json:"metric"`
 	Target     string         `json:"target"`
@@ -51,9 +53,12 @@ type EvaluateRequest struct {
 }
 
 // SignalResponse is returned by POST /v1/signals: the stored signal plus the
-// replanning decision and resulting (possibly new) plan version.
+// replanning decision and resulting (possibly new) plan version. When replanning
+// runs asynchronously, status is "pending", material is false, and plan_version is
+// the current version at acceptance time — poll the plan's versions for the result.
 type SignalResponse struct {
 	Signal      domain.Signal      `json:"signal"`
+	Status      string             `json:"status"`
 	Material    bool               `json:"material"`
 	Reason      string             `json:"reason"`
 	PlanVersion domain.PlanVersion `json:"plan_version"`

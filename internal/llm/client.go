@@ -15,6 +15,21 @@ import (
 type PlanRequest struct {
 	Goal       domain.Goal
 	SignalNote string
+
+	// SystemPromptOverride, when non-empty, is domain guidance appended to the
+	// base system prompt by model-backed planners. The GuidedPlanner sets it from
+	// a pack's prompt template; the mock ignores it (its determinism must not vary
+	// by domain). Empty == today's behaviour.
+	SystemPromptOverride string
+
+	// SignalKind is the kind of the triggering signal (domain.Signal.Kind), used by
+	// numeric planners to interpret SignalPayload. Empty for an initial plan.
+	SignalKind string
+
+	// SignalPayload carries the structured data attached to the triggering signal
+	// (domain.Signal.Payload). Numeric planners (e.g. the finance planner) parse it;
+	// text-only planners ignore it.
+	SignalPayload map[string]any
 }
 
 // PlanResult is a planner's output. The engine wraps this into an immutable

@@ -8,11 +8,13 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
+	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
@@ -21,11 +23,13 @@ const maxReplanAttempts = 3
 
 // Service implements the engine's use-cases. It is safe for concurrent use.
 type Service struct {
-	repo    storage.Repository
-	eng     *engine.Engine
-	metrics Metrics
-	clock   func() time.Time
-	log     *slog.Logger
+	repo     storage.Repository
+	eng      *engine.Engine
+	metrics  Metrics
+	clock    func() time.Time
+	log      *slog.Logger
+	queue    ReplanQueue
+	registry *pack.Registry
 }
 
 // Option customises a Service.
@@ -40,7 +44,17 @@ func WithClock(clock func() time.Time) Option { return func(s *Service) { s.cloc
 // WithLogger sets the logger.
 func WithLogger(l *slog.Logger) Option { return func(s *Service) { s.log = l } }
 
-// New constructs a Service.
+// WithReplanQueue sets the replanning queue. Defaults to a synchronous inline
+// queue (preserving the original behaviour); pass an async queue (e.g.
+// NewMemoryQueue) to decouple LLM work from signal ingestion.
+func WithReplanQueue(q ReplanQueue) Option { return func(s *Service) { s.queue = q } }
+
+// WithRegistry enables per-domain validation of goals against the pack registry.
+// When nil, domains are accepted as given (normalised only).
+func WithRegistry(r *pack.Registry) Option { return func(s *Service) { s.registry = r } }
+
+// New constructs a Service. It wires the replanning queue's handler to the
+// service's own processReplan, defaulting to a synchronous inline queue.
 func New(repo storage.Repository, eng *engine.Engine, opts ...Option) *Service {
 	s := &Service{
 		repo:    repo,
@@ -52,7 +66,16 @@ func New(repo storage.Repository, eng *engine.Engine, opts ...Option) *Service {
 	for _, opt := range opts {
 		opt(s)
 	}
+	if s.queue == nil {
+		s.queue = NewInlineQueue()
+	}
+	s.queue.Start(s.processReplan)
 	return s
+}
+
+// Shutdown drains any in-flight asynchronous replanning work.
+func (s *Service) Shutdown(ctx context.Context) error {
+	return s.queue.Shutdown(ctx)
 }
 
 // CreateGoal validates and persists a new goal.
@@ -60,19 +83,57 @@ func (s *Service) CreateGoal(ctx context.Context, in CreateGoalInput) (domain.Go
 	if in.Objective == "" {
 		return domain.Goal{}, invalid("objective is required")
 	}
+	domainKey, err := s.normalizeDomain(in.Domain)
+	if err != nil {
+		return domain.Goal{}, err
+	}
 	goal := domain.Goal{
 		ID:        domain.NewID("goal"),
 		PlayerID:  in.PlayerID,
+		Domain:    domainKey,
 		Objective: in.Objective,
 		Metric:    in.Metric,
 		Target:    in.Target,
 		Context:   in.Context,
 		CreatedAt: s.clock(),
 	}
+	if err := s.validateGoalDomain(goal); err != nil {
+		return domain.Goal{}, err
+	}
 	if err := s.repo.CreateGoal(ctx, &goal); err != nil {
 		return domain.Goal{}, err
 	}
 	return goal, nil
+}
+
+// normalizeDomain canonicalises the default domain to the empty string (so generic
+// goals serialise/hash as before) and rejects unknown domains when a registry is
+// configured.
+func (s *Service) normalizeDomain(in string) (string, error) {
+	key := in
+	if key == pack.DefaultDomain {
+		key = "" // canonical stored value for the default domain
+	}
+	if s.registry != nil && !s.registry.Known(key) {
+		return "", invalid(fmt.Sprintf("unknown domain %q; valid domains: %v", in, s.registry.IDs()))
+	}
+	return key, nil
+}
+
+// validateGoalDomain runs the pack's validation: hard errors block, soft warnings
+// are logged. A nil registry skips validation.
+func (s *Service) validateGoalDomain(g domain.Goal) error {
+	if s.registry == nil {
+		return nil
+	}
+	d, _ := s.registry.Get(g.Domain)
+	for _, iss := range d.Validate(g) {
+		if iss.Severity == pack.SeverityError {
+			return invalid(iss.Field + ": " + iss.Message)
+		}
+		s.log.Warn("goal validation warning", "domain", g.Domain, "field", iss.Field, "message", iss.Message)
+	}
+	return nil
 }
 
 // GetGoal returns a goal by ID.
@@ -118,7 +179,7 @@ func (s *Service) GeneratePlan(ctx context.Context, goalID string) (domain.PlanV
 	if err := s.repo.CreatePlanVersion(ctx, &version); err != nil {
 		return domain.PlanVersion{}, err
 	}
-	s.metrics.PlanVersionCreated()
+	s.metrics.PlanVersionCreated(goal.Domain)
 	return version, nil
 }
 
@@ -153,15 +214,15 @@ func (s *Service) ListPlanVersions(ctx context.Context, planID string, page stor
 	return s.repo.ListPlanVersions(ctx, planID, page)
 }
 
-// ApplySignal stores a signal and re-evaluates the goal's current plan. If the
-// signal materially changes the recommendation, a new immutable plan version is
-// created.
+// ApplySignal stores a signal and schedules re-evaluation of the goal's current
+// plan via the replan queue. With the default inline queue the work runs
+// synchronously and the result (material + new version) is returned immediately;
+// with an asynchronous queue the signal is accepted, a job is scheduled, and the
+// result is StatusPending — callers poll the plan's versions for the outcome.
 //
-// The version-creation step is wrapped in an optimistic-concurrency retry: if a
-// concurrent signal has already written the next version (detected via
-// storage.ErrConflict on the UNIQUE(plan_id, version) constraint), the loop
-// reloads the current version and re-evaluates against it. This serialises
-// concurrent signals correctly instead of surfacing a conflict to the caller.
+// The actual replanning (LLM call + optimistic-concurrency version write) lives in
+// processReplan, so it runs identically on either path — off the request goroutine
+// when async.
 func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult, error) {
 	if in.GoalID == "" || in.Kind == "" {
 		return SignalResult{}, invalid("goal_id and kind are required")
@@ -178,6 +239,10 @@ func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult
 		}
 		return SignalResult{}, err
 	}
+	current, err := s.repo.GetCurrentPlanVersion(ctx, plan.ID)
+	if err != nil {
+		return SignalResult{}, err
+	}
 
 	signal := domain.Signal{
 		ID:          domain.NewID("sig"),
@@ -186,42 +251,44 @@ func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult
 		Description: in.Description,
 		Payload:     in.Payload,
 		CreatedAt:   s.clock(),
+		Status:      string(StatusPending),
 	}
 	if err := s.repo.CreateSignal(ctx, &signal); err != nil {
 		return SignalResult{}, err
 	}
 
-	for attempt := 0; attempt < maxReplanAttempts; attempt++ {
-		current, err := s.repo.GetCurrentPlanVersion(ctx, plan.ID)
-		if err != nil {
-			return SignalResult{}, err
-		}
-
-		result, err := s.eng.Replan(ctx, goal, current, signal.Note())
-		if err != nil {
-			return SignalResult{}, err
-		}
-		s.metrics.ReplanEvaluated(result.Material)
-
-		if !result.Material {
-			return SignalResult{Signal: signal, Material: false, Reason: result.Reason, PlanVersion: current}, nil
-		}
-
-		err = s.repo.CreatePlanVersion(ctx, &result.Candidate)
-		switch {
-		case err == nil:
-			s.metrics.PlanVersionCreated()
-			return SignalResult{Signal: signal, Material: true, Reason: result.Reason, PlanVersion: result.Candidate}, nil
-		case errors.Is(err, storage.ErrConflict):
-			// A concurrent signal advanced the version first; retry against the
-			// new current version.
-			s.log.Debug("replan version conflict, retrying", "plan_id", plan.ID, "attempt", attempt+1)
-			continue
-		default:
-			return SignalResult{}, err
-		}
+	s.metrics.ReplanEnqueued(goal.Domain)
+	enq, err := s.queue.Enqueue(ctx, ReplanJob{
+		GoalID:        goal.ID,
+		PlanID:        plan.ID,
+		Domain:        goal.Domain,
+		SignalID:      signal.ID,
+		SignalKind:    signal.Kind,
+		SignalNote:    signal.Note(),
+		SignalPayload: signal.Payload,
+		EnqueuedAt:    s.clock(),
+	})
+	if err != nil {
+		return SignalResult{}, err
 	}
-	return SignalResult{}, storage.ErrConflict
+
+	if !enq.Synchronous {
+		// Asynchronous: accepted; the new version (if any) appears once a worker runs.
+		return SignalResult{Signal: signal, Status: StatusPending, Material: false, PlanVersion: current}, nil
+	}
+
+	out := enq.Outcome
+	status := StatusUnchanged
+	if out.Material {
+		status = StatusApplied
+	}
+	return SignalResult{Signal: signal, Status: status, Material: out.Material, Reason: out.Reason, PlanVersion: out.Version}, nil
+}
+
+// GetSignal returns a stored signal, including its replanning status — useful for
+// polling the outcome of an asynchronously-processed signal.
+func (s *Service) GetSignal(ctx context.Context, id string) (domain.Signal, error) {
+	return s.repo.GetSignal(ctx, id)
 }
 
 // RecordOutcome validates and stores an outcome for a move or experiment.
@@ -258,13 +325,21 @@ func (s *Service) Evaluate(ctx context.Context, in EvaluateInput) (domain.PlanVe
 	if in.Objective == "" {
 		return domain.PlanVersion{}, invalid("objective is required")
 	}
+	domainKey, err := s.normalizeDomain(in.Domain)
+	if err != nil {
+		return domain.PlanVersion{}, err
+	}
 	goal := domain.Goal{
 		ID:        domain.NewID("goal"),
+		Domain:    domainKey,
 		Objective: in.Objective,
 		Metric:    in.Metric,
 		Target:    in.Target,
 		Context:   in.Context,
 		CreatedAt: s.clock(),
+	}
+	if err := s.validateGoalDomain(goal); err != nil {
+		return domain.PlanVersion{}, err
 	}
 	return s.eng.Evaluate(ctx, goal, in.SignalNote)
 }

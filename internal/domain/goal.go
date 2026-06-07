@@ -7,6 +7,7 @@ import "time"
 type Goal struct {
 	ID        string    `json:"id"`
 	PlayerID  string    `json:"player_id,omitempty"`
+	Domain    string    `json:"domain,omitempty"` // decision domain / pack key: generic|investing|growth|career; empty resolves to generic
 	Objective string    `json:"objective"`
 	Metric    string    `json:"metric,omitempty"` // how progress is measured
 	Target    string    `json:"target,omitempty"` // the value/threshold that defines success

@@ -2,6 +2,7 @@ package api
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -14,17 +15,27 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/logging"
+	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
 func newTestServer() http.Handler {
+	h, _ := newTestServerWithService()
+	return h
+}
+
+// newTestServerWithService builds a server wired with the pack registry (so domain
+// validation is active, as in production) and returns the service too, so tests can
+// drain an async replan queue.
+func newTestServerWithService(opts ...app.Option) (http.Handler, *app.Service) {
 	cfg := config.Default()
 	log := logging.New("error", "text")
 	repo := storage.NewMemory()
 	eng := engine.New(llm.NewMockPlanner())
 	metrics := NewMetrics()
-	svc := app.New(repo, eng, app.WithMetrics(metrics))
-	return New(cfg, log, svc, metrics).Handler()
+	base := []app.Option{app.WithMetrics(metrics), app.WithRegistry(pack.NewRegistry())}
+	svc := app.New(repo, eng, append(base, opts...)...)
+	return New(cfg, log, svc, metrics).Handler(), svc
 }
 
 func doJSON(t *testing.T, h http.Handler, method, path string, body any) *httptest.ResponseRecorder {
@@ -179,5 +190,73 @@ func TestMetricsEndpoint(t *testing.T) {
 	}
 	if !bytes.Contains(rec.Body.Bytes(), []byte("dde_http_requests_total")) {
 		t.Error("expected custom metric in /metrics output")
+	}
+}
+
+func TestCreateGoalUnknownDomainRejected(t *testing.T) {
+	h := newTestServer()
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{
+		Domain:    "bogus",
+		Objective: "x",
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for unknown domain, got %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestCreateGoalInvestingDomainAccepted(t *testing.T) {
+	h := newTestServer()
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{
+		Domain:    "investing",
+		Objective: "Build a thesis-driven position",
+		Context: domain.Context{
+			Assets:      []domain.Asset{{Name: "ACME", Kind: "ticker"}},
+			Constraints: []domain.Constraint{{Name: "2y", Kind: "time_horizon"}, {Name: "10% dd", Kind: "drawdown_limit"}},
+		},
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201 for investing goal, got %d: %s", rec.Code, rec.Body)
+	}
+	g := decode[domain.Goal](t, rec.Body)
+	if g.Domain != "investing" {
+		t.Errorf("expected investing domain, got %q", g.Domain)
+	}
+}
+
+func TestAsyncSignalReturns202AndStatus(t *testing.T) {
+	h, svc := newTestServerWithService(app.WithReplanQueue(app.NewMemoryQueue(2, 16, nil)))
+
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{
+		Objective: "Grow to 1000 customers", Metric: "customers",
+		Context: domain.Context{Assets: []domain.Asset{{Name: "network"}}},
+	})
+	goal := decode[domain.Goal](t, rec.Body)
+	rec = doJSON(t, h, http.MethodPost, "/v1/goals/"+goal.ID+"/plans", nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create plan status %d: %s", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, h, http.MethodPost, "/v1/signals", CreateSignalRequest{
+		GoalID: goal.ID, Kind: "competitive_shift", Description: "free tier",
+	})
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202 for async signal, got %d: %s", rec.Code, rec.Body)
+	}
+	resp := decode[SignalResponse](t, rec.Body)
+	if resp.Status != "pending" {
+		t.Fatalf("expected pending status, got %q", resp.Status)
+	}
+
+	// Drain the worker, then the signal status endpoint must report the outcome.
+	if err := svc.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	rec = doJSON(t, h, http.MethodGet, "/v1/signals/"+resp.Signal.ID, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("get signal status %d: %s", rec.Code, rec.Body)
+	}
+	sig := decode[domain.Signal](t, rec.Body)
+	if sig.Status != "applied" || sig.ResultVersion != 2 {
+		t.Errorf("expected applied v2, got status=%q v=%d", sig.Status, sig.ResultVersion)
 	}
 }

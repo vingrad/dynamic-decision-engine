@@ -10,6 +10,11 @@ type DecisionProvenance struct {
 	Planner          string `json:"planner"`
 	PromptVersion    string `json:"prompt_version"`
 	Model            string `json:"model"`
+	// PackID and PackVersion identify the domain pack whose prompt/policy shaped
+	// this plan, so a historical recommendation can be reconstructed even after
+	// packs evolve. Empty for the generic domain / when no pack was applied.
+	PackID      string `json:"pack_id,omitempty"`
+	PackVersion string `json:"pack_version,omitempty"`
 }
 
 // ModelInvocation captures metadata about a single call to a reasoning model.

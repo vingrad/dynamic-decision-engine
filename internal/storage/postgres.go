@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -91,22 +92,22 @@ func (r *PostgresRepository) CreateGoal(ctx context.Context, g *domain.Goal) err
 		playerID = g.PlayerID
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO goals (id, player_id, objective, metric, target, context, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		g.ID, playerID, g.Objective, g.Metric, g.Target, cx, g.CreatedAt)
+		INSERT INTO goals (id, player_id, domain, objective, metric, target, context, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+		g.ID, playerID, g.Domain, g.Objective, g.Metric, g.Target, cx, g.CreatedAt)
 	return mapError(err)
 }
 
 func (r *PostgresRepository) GetGoal(ctx context.Context, id string) (domain.Goal, error) {
 	return r.scanGoal(r.pool.QueryRow(ctx, `
-		SELECT id, COALESCE(player_id, ''), objective, metric, target, context, created_at
+		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
 		FROM goals WHERE id = $1`, id))
 }
 
 func (r *PostgresRepository) ListGoals(ctx context.Context, page Page) ([]domain.Goal, error) {
 	page = page.Normalize()
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, COALESCE(player_id, ''), objective, metric, target, context, created_at
+		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
 		FROM goals ORDER BY created_at DESC, id LIMIT $1 OFFSET $2`, page.Limit, page.Offset)
 	if err != nil {
 		return nil, mapError(err)
@@ -132,7 +133,7 @@ type rowScanner interface {
 func (r *PostgresRepository) scanGoal(row rowScanner) (domain.Goal, error) {
 	var g domain.Goal
 	var cx []byte
-	if err := row.Scan(&g.ID, &g.PlayerID, &g.Objective, &g.Metric, &g.Target, &cx, &g.CreatedAt); err != nil {
+	if err := row.Scan(&g.ID, &g.PlayerID, &g.Domain, &g.Objective, &g.Metric, &g.Target, &cx, &g.CreatedAt); err != nil {
 		return domain.Goal{}, mapError(err)
 	}
 	if err := unmarshalJSON(cx, &g.Context); err != nil {
@@ -292,6 +293,40 @@ func (r *PostgresRepository) ListSignals(ctx context.Context, goalID string, pag
 		out = append(out, s)
 	}
 	return out, rows.Err()
+}
+
+func (r *PostgresRepository) GetSignal(ctx context.Context, id string) (domain.Signal, error) {
+	var s domain.Signal
+	var payload []byte
+	var processed *time.Time
+	err := r.pool.QueryRow(ctx, `
+		SELECT id, goal_id, kind, description, payload, created_at,
+		       COALESCE(status, 'pending'), COALESCE(reason, ''), COALESCE(result_version, 0), COALESCE(error, ''), processed_at
+		FROM signal WHERE id = $1`, id).Scan(
+		&s.ID, &s.GoalID, &s.Kind, &s.Description, &payload, &s.CreatedAt,
+		&s.Status, &s.Reason, &s.ResultVersion, &s.Error, &processed)
+	if err != nil {
+		return domain.Signal{}, mapError(err)
+	}
+	if err := unmarshalJSON(payload, &s.Payload); err != nil {
+		return domain.Signal{}, err
+	}
+	s.ProcessedAt = processed
+	return s, nil
+}
+
+func (r *PostgresRepository) MarkSignalProcessed(ctx context.Context, id, status string, resultVersion int, reason, errMsg string, at time.Time) error {
+	ct, err := r.pool.Exec(ctx, `
+		UPDATE signal SET status = $2, result_version = $3, reason = $4, error = $5, processed_at = $6
+		WHERE id = $1`,
+		id, status, resultVersion, reason, errMsg, at)
+	if err != nil {
+		return mapError(err)
+	}
+	if ct.RowsAffected() == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // Outcomes --------------------------------------------------------------------

@@ -37,6 +37,24 @@ type Config struct {
 	RequestTimeout time.Duration `json:"request_timeout" yaml:"request_timeout"`
 	// CORSAllowedOrigins lists origins permitted to call the API (the admin UI).
 	CORSAllowedOrigins []string `json:"cors_allowed_origins" yaml:"cors_allowed_origins"`
+	// PolicyFile is an optional path to per-domain tunables (DDE_POLICY).
+	PolicyFile string `json:"policy_file" yaml:"policy_file"`
+	// MarketDataProvider selects the market-data backend for the finance planner:
+	// "offline" (default, embedded fixtures, no network) or "http" (stub).
+	MarketDataProvider string `json:"market_data_provider" yaml:"market_data_provider"`
+	// MarketDataVendor names the HTTP vendor when MarketDataProvider == "http".
+	MarketDataVendor string `json:"market_data_vendor" yaml:"market_data_vendor"`
+	// FinanceHybrid enables LLM thesis narration on top of numeric scoring.
+	FinanceHybrid bool `json:"finance_hybrid" yaml:"finance_hybrid"`
+	// PlanCacheSize bounds the in-memory plan cache (entries). 0 disables caching.
+	PlanCacheSize int `json:"plan_cache_size" yaml:"plan_cache_size"`
+	// PlanCacheTTL is how long finance (market-data-dependent) plans stay cached.
+	// 0 disables finance caching. Text/LLM plans are deterministic and never expire.
+	PlanCacheTTL time.Duration `json:"plan_cache_ttl" yaml:"plan_cache_ttl"`
+	// ReplanAsync runs replanning on a background worker pool (serve mode).
+	ReplanAsync bool `json:"replan_async" yaml:"replan_async"`
+	// ReplanWorkers sets the async worker count when ReplanAsync is true.
+	ReplanWorkers int `json:"replan_workers" yaml:"replan_workers"`
 }
 
 // Default returns the baseline configuration used when nothing else is set.
@@ -52,6 +70,14 @@ func Default() Config {
 		LLMMaxTokens:       4096,
 		RequestTimeout:     15 * time.Second,
 		CORSAllowedOrigins: []string{"http://localhost:3000"},
+		PolicyFile:         "",
+		MarketDataProvider: "offline",
+		MarketDataVendor:   "alphavantage",
+		FinanceHybrid:      false,
+		PlanCacheSize:      1024,
+		PlanCacheTTL:       60 * time.Second,
+		ReplanAsync:        false,
+		ReplanWorkers:      4,
 	}
 }
 
@@ -135,6 +161,36 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("DDE_CORS_ALLOWED_ORIGINS"); v != "" {
 		cfg.CORSAllowedOrigins = splitAndTrim(v)
 	}
+	if v := os.Getenv("DDE_POLICY"); v != "" {
+		cfg.PolicyFile = v
+	}
+	if v := os.Getenv("DDE_MARKETDATA_PROVIDER"); v != "" {
+		cfg.MarketDataProvider = v
+	}
+	if v := os.Getenv("DDE_MARKETDATA_VENDOR"); v != "" {
+		cfg.MarketDataVendor = v
+	}
+	if v := os.Getenv("DDE_FINANCE_HYBRID"); v != "" {
+		cfg.FinanceHybrid = v == "1" || strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("DDE_PLAN_CACHE_SIZE"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.PlanCacheSize = n
+		}
+	}
+	if v := os.Getenv("DDE_PLAN_CACHE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.PlanCacheTTL = d
+		}
+	}
+	if v := os.Getenv("DDE_REPLAN_ASYNC"); v != "" {
+		cfg.ReplanAsync = v == "1" || strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("DDE_REPLAN_WORKERS"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ReplanWorkers = n
+		}
+	}
 }
 
 // Validate checks the configuration for obviously invalid values.
@@ -153,9 +209,14 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: invalid log_format %q", c.LogFormat)
 	}
 	switch c.Planner {
-	case "mock", "anthropic", "openai":
+	case "mock", "anthropic", "openai", "finance":
 	default:
 		return fmt.Errorf("config: invalid planner %q", c.Planner)
+	}
+	switch c.MarketDataProvider {
+	case "offline", "http":
+	default:
+		return fmt.Errorf("config: invalid market_data_provider %q", c.MarketDataProvider)
 	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("config: request_timeout must be positive")

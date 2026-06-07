@@ -258,7 +258,13 @@ Possible use cases include:
 * experiment selection and replanning
 * decision audit trails for AI-assisted systems
 
-The core engine is intentionally generic. Domains can be added as separate packages, templates, or adapters.
+The core engine is intentionally generic. Domains are added as **domain packs** —
+pure-data descriptors that supply per-domain prompt guidance, materiality
+thresholds, scoring tunables, vocabulary and validation. Four ship today:
+`generic` (default), `investing` (with an optional numeric scoring planner and
+point-in-time market data), `growth` and `career`.
+
+> 📖 **Domains, the investing pack, policy, async replanning and backtesting:** [`docs/domains.md`](docs/domains.md)
 
 ---
 
@@ -312,8 +318,9 @@ docker compose up --build
 ## CLI
 
 ```bash
-dde evaluate --input examples/founder-growth.json
+dde evaluate --input examples/investing-thesis.json
 dde signal --input examples/signal-update.json
+dde backtest --input internal/backtest/testdata/scenario.json
 dde migrate
 dde serve
 dde version
@@ -428,12 +435,16 @@ Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper ad
 * [x] Minimal admin UI
 * [x] Application/use-case layer with concurrency-safe replanning
 * [x] Anthropic Claude planner adapter (structured output via tool use)
+* [x] Multi-domain support (per-goal domain + pack registry + planner router)
+* [x] Domain packs and examples (generic, investing, growth, career)
+* [x] Investing pack: numeric scoring planner + point-in-time market data + backtesting
+* [x] Config-as-data policy (per-domain scoring/materiality tunables)
+* [x] Async, coalesced replanning + snapshot-keyed plan cache
+* [x] Per-domain metrics
 * [ ] OpenAI planner adapter (interface + placeholder in place)
-* [ ] Policy constraints
-* [ ] Multi-objective scoring
+* [ ] Real market-data vendor (HTTP provider stub in place)
 * [ ] OpenTelemetry tracing
 * [ ] Authentication / authorization
-* [ ] Domain packs and examples
 
 ---
 

@@ -1,0 +1,25 @@
+{
+  "goal": {
+    "domain": "investing",
+    "objective": "Build a thesis-driven position in ACME over the next year",
+    "metric": "calibrated thesis conviction",
+    "context": {
+      "assets": [
+        { "name": "ACME", "kind": "ticker" }
+      ],
+      "constraints": [
+        { "name": "max 10% drawdown", "kind": "drawdown_limit" },
+        { "name": "2 year horizon", "kind": "time_horizon" }
+      ]
+    }
+  },
+  "signal": {
+    "kind": "thesis_break",
+    "description": "ACME's largest customer terminated its contract, breaking the demand-recovery thesis.",
+    "payload": {
+      "ticker": "ACME",
+      "reason": "largest customer terminated contract",
+      "hard": true
+    }
+  }
+}

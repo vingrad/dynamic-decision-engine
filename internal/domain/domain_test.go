@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -55,6 +56,26 @@ func TestOutcomeResultValid(t *testing.T) {
 	}
 	if OutcomeResult("maybe").Valid() {
 		t.Error("unexpected valid result")
+	}
+}
+
+// TestGoalJSONOmitsEmptyDomain guards backward compatibility: a goal with no
+// domain (the generic default) must serialise exactly as before — no "domain"
+// key — so existing API consumers and example fixtures are unaffected.
+func TestGoalJSONOmitsEmptyDomain(t *testing.T) {
+	b, err := json.Marshal(Goal{Objective: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(b), "domain") {
+		t.Errorf("empty domain should be omitted from JSON, got %s", b)
+	}
+	b, err = json.Marshal(Goal{Domain: "investing", Objective: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(b), `"domain":"investing"`) {
+		t.Errorf("non-empty domain should serialise, got %s", b)
 	}
 }
 

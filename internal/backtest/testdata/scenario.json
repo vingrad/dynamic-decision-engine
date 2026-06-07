@@ -1,0 +1,34 @@
+{
+  "name": "ACME thesis lifecycle",
+  "start_at": "2026-01-20T00:00:00Z",
+  "goal": {
+    "domain": "investing",
+    "objective": "Build a thesis-driven position in ACME",
+    "metric": "calibrated conviction",
+    "context": {
+      "situation": "ACME looks undervalued on normalised earnings.",
+      "assets": [
+        { "name": "ACME", "kind": "ticker", "description": "Primary thesis instrument" },
+        { "name": "research edge", "kind": "edge" }
+      ],
+      "constraints": [
+        { "name": "max 10% drawdown", "kind": "drawdown_limit" },
+        { "name": "2 year horizon", "kind": "time_horizon" }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-01-25T00:00:00Z",
+      "kind": "valuation_change",
+      "payload": { "ticker": "ACME", "metric": "pe", "value": 14.0, "fair_value": 20.0, "gap_pct": 0.30 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-02-10T00:00:00Z",
+      "kind": "thesis_break",
+      "payload": { "ticker": "ACME", "reason": "core customer lost", "hard": true },
+      "should_kill": true
+    }
+  ]
+}

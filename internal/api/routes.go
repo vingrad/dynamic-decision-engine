@@ -46,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 			r.Get("/{id}/versions", s.handleListPlanVersions)
 		})
 		r.Post("/signals", s.handleCreateSignal)
+		r.Get("/signals/{id}", s.handleGetSignal)
 		r.Post("/outcomes", s.handleCreateOutcome)
 		r.Post("/evaluate", s.handleEvaluate)
 	})

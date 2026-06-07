@@ -13,17 +13,23 @@ import (
 
 	"github.com/vingrad/dynamic-decision-engine/internal/api"
 	"github.com/vingrad/dynamic-decision-engine/internal/app"
+	"github.com/vingrad/dynamic-decision-engine/internal/backtest"
 	"github.com/vingrad/dynamic-decision-engine/internal/config"
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/logging"
+	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
+	"github.com/vingrad/dynamic-decision-engine/internal/pack"
+	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
+	"github.com/vingrad/dynamic-decision-engine/internal/wire"
 )
 
-// newPlanner selects the reasoning backend named in config. The mock is the
-// default and runs with no external dependencies.
-func newPlanner(cfg config.Config) llm.Planner {
+// newBaseModelPlanner selects the underlying text model planner named in config.
+// It backs the text-based domains (generic, growth, career) via the planner
+// router; the investing domain uses the numeric finance planner automatically.
+func newBaseModelPlanner(cfg config.Config) llm.Planner {
 	switch cfg.Planner {
 	case "anthropic":
 		return llm.NewAnthropicPlanner(llm.AnthropicConfig{
@@ -36,9 +42,48 @@ func newPlanner(cfg config.Config) llm.Planner {
 			APIKey: os.Getenv("OPENAI_API_KEY"),
 			Model:  os.Getenv("OPENAI_MODEL"),
 		})
-	default:
+	default: // "mock", "finance", or anything else -> deterministic mock base
 		return llm.NewMockPlanner()
 	}
+}
+
+// newProvider builds the market-data provider for the finance planner. Offline
+// (embedded fixtures, no network) is the default; "http" selects the vendor stub.
+func newProvider(cfg config.Config) (marketdata.Provider, error) {
+	if cfg.MarketDataProvider == "http" {
+		return marketdata.NewHTTPProvider(marketdata.HTTPConfig{
+			APIKey: os.Getenv("DDE_MARKETDATA_API_KEY"),
+			Vendor: cfg.MarketDataVendor,
+		}), nil
+	}
+	return marketdata.NewOfflineProvider()
+}
+
+// newEngine assembles the multi-domain engine: a per-domain planner router (with
+// optional plan cache and the finance planner for investing) plus a per-domain
+// evaluator resolver, both built from the pack registry overlaid with policy.
+func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheObs llm.CacheObserver) (*engine.Engine, error) {
+	provider, err := newProvider(cfg)
+	if err != nil {
+		return nil, err
+	}
+	var cache, financeCache llm.PlanCache
+	if cfg.PlanCacheSize > 0 {
+		// Text/LLM plans are deterministic -> no expiry. Finance plans depend on
+		// as-of market data -> TTL expiry so they refresh.
+		cache = llm.NewMemoryCache(cfg.PlanCacheSize)
+		if cfg.PlanCacheTTL > 0 {
+			financeCache = llm.NewMemoryCacheTTL(cfg.PlanCacheSize, cfg.PlanCacheTTL, nil)
+		}
+	}
+	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
+		Base:         newBaseModelPlanner(cfg),
+		Provider:     provider,
+		Cache:        cache,
+		FinanceCache: financeCache,
+		CacheObs:     cacheObs,
+	})
+	return engine.New(router, engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol))), nil
 }
 
 // newServeCommand runs the REST API server.
@@ -66,9 +111,29 @@ func newServeCommand() *cobra.Command {
 			}
 			defer repo.Close()
 
-			eng := engine.New(newPlanner(cfg))
+			reg := pack.NewRegistry()
+			pol, err := policy.Load(cfg.PolicyFile)
+			if err != nil {
+				return err
+			}
 			metrics := api.NewMetrics()
-			svc := app.New(repo, eng, app.WithMetrics(metrics), app.WithLogger(log))
+			eng, err := newEngine(cfg, reg, pol, metrics)
+			if err != nil {
+				return err
+			}
+
+			opts := []app.Option{app.WithMetrics(metrics), app.WithLogger(log), app.WithRegistry(reg)}
+			if cfg.ReplanAsync {
+				opts = append(opts, app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log)))
+			}
+			svc := app.New(repo, eng, opts...)
+			// Drain in-flight async replanning on shutdown.
+			defer func() {
+				sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+				defer cancel()
+				_ = svc.Shutdown(sctx)
+			}()
+
 			srv := api.New(cfg, log, svc, metrics)
 			return srv.Run(ctx)
 		},
@@ -110,6 +175,7 @@ func newMigrateCommand() *cobra.Command {
 
 // evaluateInput is the file format consumed by `dde evaluate`.
 type evaluateInput struct {
+	Domain     string         `json:"domain"`
 	Objective  string         `json:"objective"`
 	Metric     string         `json:"metric"`
 	Target     string         `json:"target"`
@@ -128,8 +194,12 @@ func newEvaluateCommand() *cobra.Command {
 			if err := readJSONFile(input, &in); err != nil {
 				return err
 			}
-			svc := newMemoryService()
+			svc, err := newMemoryService()
+			if err != nil {
+				return err
+			}
 			version, err := svc.Evaluate(cmd.Context(), app.EvaluateInput{
+				Domain:     in.Domain,
 				Objective:  in.Objective,
 				Metric:     in.Metric,
 				Target:     in.Target,
@@ -151,14 +221,16 @@ func newEvaluateCommand() *cobra.Command {
 // plus a signal to apply to it, so replanning can be demonstrated offline.
 type signalInput struct {
 	Goal struct {
+		Domain    string         `json:"domain"`
 		Objective string         `json:"objective"`
 		Metric    string         `json:"metric"`
 		Target    string         `json:"target"`
 		Context   domain.Context `json:"context"`
 	} `json:"goal"`
 	Signal struct {
-		Kind        string `json:"kind"`
-		Description string `json:"description"`
+		Kind        string         `json:"kind"`
+		Description string         `json:"description"`
+		Payload     map[string]any `json:"payload"`
 	} `json:"signal"`
 }
 
@@ -181,8 +253,12 @@ func newSignalCommand() *cobra.Command {
 			// Drive the same use-cases the API uses: create the goal, generate
 			// its initial plan, then apply the signal through ApplySignal.
 			ctx := cmd.Context()
-			svc := newMemoryService()
+			svc, err := newMemoryService()
+			if err != nil {
+				return err
+			}
 			goal, err := svc.CreateGoal(ctx, app.CreateGoalInput{
+				Domain:    in.Goal.Domain,
 				Objective: in.Goal.Objective,
 				Metric:    in.Goal.Metric,
 				Target:    in.Goal.Target,
@@ -199,6 +275,7 @@ func newSignalCommand() *cobra.Command {
 				GoalID:      goal.ID,
 				Kind:        in.Signal.Kind,
 				Description: in.Signal.Description,
+				Payload:     in.Signal.Payload,
 			})
 			if err != nil {
 				return err
@@ -221,10 +298,66 @@ func newSignalCommand() *cobra.Command {
 	return cmd
 }
 
-// newMemoryService builds an in-memory, mock-planner service for the offline CLI
-// commands (evaluate, signal). It deliberately reuses the production use-cases.
-func newMemoryService() *app.Service {
-	return app.New(storage.NewMemory(), engine.New(llm.NewMockPlanner()))
+// newBacktestCommand replays a scenario of market signals through the engine and
+// reports decision-quality metrics. It measures replanning/decision quality, not a
+// tradeable strategy return. Runs fully offline.
+func newBacktestCommand() *cobra.Command {
+	var input string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "backtest",
+		Short: "Replay a signal timeline and report decision-quality metrics (offline)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			var sc backtest.Scenario
+			if err := readJSONFile(input, &sc); err != nil {
+				return err
+			}
+			var provOpts []marketdata.OfflineOption
+			if sc.FixtureDir != "" {
+				provOpts = append(provOpts, marketdata.WithFixtureDir(sc.FixtureDir))
+			}
+			provider, err := marketdata.NewOfflineProvider(provOpts...)
+			if err != nil {
+				return err
+			}
+			pol, err := policy.Load(config.Default().PolicyFile)
+			if err != nil {
+				return err
+			}
+			h := backtest.New(pack.NewRegistry(), pol, provider)
+			rep, err := h.Run(cmd.Context(), sc)
+			if err != nil {
+				return err
+			}
+			if asJSON {
+				return printJSON(rep)
+			}
+			rep.Render(os.Stdout)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&input, "input", "", "path to a backtest scenario JSON file (required)")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the report as JSON")
+	_ = cmd.MarkFlagRequired("input")
+	return cmd
+}
+
+// newMemoryService builds an in-memory, offline service for the CLI commands
+// (evaluate, signal). It reuses the production wiring — registry, planner router
+// (incl. the finance planner on offline fixtures) and per-domain evaluators — with
+// the synchronous inline replan queue so results are immediate.
+func newMemoryService() (*app.Service, error) {
+	cfg := config.Default()
+	reg := pack.NewRegistry()
+	pol, err := policy.Load(cfg.PolicyFile)
+	if err != nil {
+		return nil, err
+	}
+	eng, err := newEngine(cfg, reg, pol, nil)
+	if err != nil {
+		return nil, err
+	}
+	return app.New(storage.NewMemory(), eng, app.WithRegistry(reg)), nil
 }
 
 // newVersionCommand prints build information.

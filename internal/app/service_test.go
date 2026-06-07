@@ -9,11 +9,16 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
+	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
 func newTestService() *Service {
 	return New(storage.NewMemory(), engine.New(llm.NewMockPlanner()))
+}
+
+func newTestServiceWithRegistry() *Service {
+	return New(storage.NewMemory(), engine.New(llm.NewMockPlanner()), WithRegistry(pack.NewRegistry()))
 }
 
 func makeGoal(t *testing.T, s *Service) domain.Goal {
@@ -88,6 +93,50 @@ func TestApplySignalMaterialThenImmaterial(t *testing.T) {
 	}
 	if r2.Material || r2.PlanVersion.Version != 2 {
 		t.Fatalf("expected immaterial v2, got material=%v v=%d", r2.Material, r2.PlanVersion.Version)
+	}
+}
+
+func TestCreateGoalUnknownDomain(t *testing.T) {
+	s := newTestServiceWithRegistry()
+	_, err := s.CreateGoal(context.Background(), CreateGoalInput{Domain: "bogus", Objective: "x"})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for unknown domain, got %v", err)
+	}
+}
+
+func TestCreateGoalDefaultsToGeneric(t *testing.T) {
+	s := newTestServiceWithRegistry()
+	// Both empty and "generic" canonicalise to the empty stored domain.
+	g1, err := s.CreateGoal(context.Background(), CreateGoalInput{Objective: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g2, err := s.CreateGoal(context.Background(), CreateGoalInput{Domain: "generic", Objective: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g1.Domain != "" || g2.Domain != "" {
+		t.Errorf("default domain should canonicalise to empty, got %q and %q", g1.Domain, g2.Domain)
+	}
+}
+
+func TestCreateGoalKnownDomain(t *testing.T) {
+	s := newTestServiceWithRegistry()
+	g, err := s.CreateGoal(context.Background(), CreateGoalInput{Domain: "investing", Objective: "Buy ACME"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.Domain != "investing" {
+		t.Errorf("expected investing domain, got %q", g.Domain)
+	}
+}
+
+func TestCreateGoalNoRegistryAcceptsAnyDomain(t *testing.T) {
+	// Without a registry, validation is skipped (backward compatible).
+	s := newTestService()
+	if _, err := s.CreateGoal(context.Background(), CreateGoalInput{Domain: "anything", Objective: "x"}); err != nil {
+		t.Fatalf("no-registry service should accept any domain, got %v", err)
 	}
 }
 

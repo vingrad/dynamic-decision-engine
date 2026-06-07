@@ -115,7 +115,7 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 		Model:     p.model,
 		MaxTokens: p.maxTokens,
 		System: []anthropic.TextBlockParam{{
-			Text: systemPrompt,
+			Text: effectiveSystemPrompt(systemPrompt, req.SystemPromptOverride),
 		}},
 		Messages: []anthropic.MessageParam{
 			anthropic.NewUserMessage(anthropic.NewTextBlock(string(userPayload))),

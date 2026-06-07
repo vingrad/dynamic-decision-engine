@@ -4,6 +4,7 @@ import (
 	"context"
 	"sort"
 	"sync"
+	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
@@ -218,6 +219,34 @@ func (m *MemoryRepository) CreateSignal(_ context.Context, s *domain.Signal) err
 	defer m.mu.Unlock()
 	m.signals = append(m.signals, cloneSignal(*s))
 	return nil
+}
+
+func (m *MemoryRepository) GetSignal(_ context.Context, id string) (domain.Signal, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for i := range m.signals {
+		if m.signals[i].ID == id {
+			return cloneSignal(m.signals[i]), nil
+		}
+	}
+	return domain.Signal{}, ErrNotFound
+}
+
+func (m *MemoryRepository) MarkSignalProcessed(_ context.Context, id, status string, resultVersion int, reason, errMsg string, at time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for i := range m.signals {
+		if m.signals[i].ID == id {
+			t := at
+			m.signals[i].Status = status
+			m.signals[i].ResultVersion = resultVersion
+			m.signals[i].Reason = reason
+			m.signals[i].Error = errMsg
+			m.signals[i].ProcessedAt = &t
+			return nil
+		}
+	}
+	return ErrNotFound
 }
 
 func (m *MemoryRepository) ListSignals(_ context.Context, goalID string, page Page) ([]domain.Signal, error) {

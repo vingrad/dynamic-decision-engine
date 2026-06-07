@@ -8,6 +8,7 @@ import "github.com/vingrad/dynamic-decision-engine/internal/domain"
 // CreateGoalInput is the input to CreateGoal.
 type CreateGoalInput struct {
 	PlayerID  string
+	Domain    string
 	Objective string
 	Metric    string
 	Target    string
@@ -33,6 +34,7 @@ type OutcomeInput struct {
 
 // EvaluateInput is the input to the stateless Evaluate use-case.
 type EvaluateInput struct {
+	Domain     string
 	Objective  string
 	Metric     string
 	Target     string
@@ -40,10 +42,28 @@ type EvaluateInput struct {
 	SignalNote string
 }
 
-// SignalResult is the outcome of applying a signal: the stored signal, the
-// materiality decision, and the resulting (possibly new) plan version.
+// SignalStatus describes how a signal's replanning was handled.
+type SignalStatus string
+
+const (
+	// StatusApplied means replanning ran and a new immutable version was created.
+	StatusApplied SignalStatus = "applied"
+	// StatusUnchanged means replanning ran but the change was immaterial.
+	StatusUnchanged SignalStatus = "unchanged"
+	// StatusPending means the signal was accepted and replanning was scheduled
+	// asynchronously; poll the plan's versions for the result.
+	StatusPending SignalStatus = "pending"
+	// StatusFailed means async replanning errored; see the signal's error field.
+	StatusFailed SignalStatus = "failed"
+)
+
+// SignalResult is the outcome of applying a signal: the stored signal, how it was
+// handled, the materiality decision, and the resulting (possibly new) plan version.
+// For asynchronous (pending) results, Material is false and PlanVersion is the
+// current version at acceptance time.
 type SignalResult struct {
 	Signal      domain.Signal
+	Status      SignalStatus
 	Material    bool
 	Reason      string
 	PlanVersion domain.PlanVersion

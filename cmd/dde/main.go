@@ -29,6 +29,7 @@ func main() {
 		newMigrateCommand(),
 		newEvaluateCommand(),
 		newSignalCommand(),
+		newBacktestCommand(),
 		newVersionCommand(),
 	)
 

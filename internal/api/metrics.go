@@ -19,8 +19,19 @@ type Metrics struct {
 	reg          *prometheus.Registry
 	requests     *prometheus.CounterVec
 	duration     *prometheus.HistogramVec
-	planVersions prometheus.Counter
+	planVersions *prometheus.CounterVec
 	replans      *prometheus.CounterVec
+	replanQueue  *prometheus.CounterVec
+	planCache    *prometheus.CounterVec
+}
+
+// domainLabel normalises an empty domain to "generic" so the metric label is
+// always meaningful and cardinality stays bounded to the registered packs.
+func domainLabel(domain string) string {
+	if domain == "" {
+		return "generic"
+	}
+	return domain
 }
 
 // NewMetrics constructs and registers the API metrics.
@@ -37,17 +48,25 @@ func NewMetrics() *Metrics {
 			Help:    "HTTP request latency in seconds by method and route.",
 			Buckets: prometheus.DefBuckets,
 		}, []string{"method", "route"}),
-		planVersions: prometheus.NewCounter(prometheus.CounterOpts{
+		planVersions: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "dde_plan_versions_created_total",
-			Help: "Total number of immutable plan versions created.",
-		}),
+			Help: "Total number of immutable plan versions created, by domain.",
+		}, []string{"domain"}),
 		replans: prometheus.NewCounterVec(prometheus.CounterOpts{
 			Name: "dde_replans_total",
-			Help: "Total replanning evaluations, labelled by whether the change was material.",
-		}, []string{"material"}),
+			Help: "Total replanning evaluations, by domain and whether the change was material.",
+		}, []string{"domain", "material"}),
+		replanQueue: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "dde_replan_jobs_total",
+			Help: "Replanning jobs by domain and outcome (enqueued|failed).",
+		}, []string{"domain", "event"}),
+		planCache: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "dde_plan_cache_total",
+			Help: "Plan-cache lookups by domain and result (hit|miss).",
+		}, []string{"domain", "result"}),
 	}
 	reg.MustRegister(
-		m.requests, m.duration, m.planVersions, m.replans,
+		m.requests, m.duration, m.planVersions, m.replans, m.replanQueue, m.planCache,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -78,10 +97,32 @@ func (m *Metrics) middleware(next http.Handler) http.Handler {
 	})
 }
 
-// PlanVersionCreated increments the plan-version counter.
-func (m *Metrics) PlanVersionCreated() { m.planVersions.Inc() }
+// PlanVersionCreated increments the plan-version counter for a domain.
+func (m *Metrics) PlanVersionCreated(domain string) {
+	m.planVersions.WithLabelValues(domainLabel(domain)).Inc()
+}
 
-// ReplanEvaluated records a replanning evaluation outcome.
-func (m *Metrics) ReplanEvaluated(material bool) {
-	m.replans.WithLabelValues(strconv.FormatBool(material)).Inc()
+// ReplanEvaluated records a replanning evaluation outcome for a domain.
+func (m *Metrics) ReplanEvaluated(domain string, material bool) {
+	m.replans.WithLabelValues(domainLabel(domain), strconv.FormatBool(material)).Inc()
+}
+
+// ReplanEnqueued records that a signal scheduled an async replanning job.
+func (m *Metrics) ReplanEnqueued(domain string) {
+	m.replanQueue.WithLabelValues(domainLabel(domain), "enqueued").Inc()
+}
+
+// ReplanFailed records that an async replanning job errored.
+func (m *Metrics) ReplanFailed(domain string) {
+	m.replanQueue.WithLabelValues(domainLabel(domain), "failed").Inc()
+}
+
+// PlanCacheHit records a plan-cache hit for a domain.
+func (m *Metrics) PlanCacheHit(domain string) {
+	m.planCache.WithLabelValues(domainLabel(domain), "hit").Inc()
+}
+
+// PlanCacheMiss records a plan-cache miss for a domain.
+func (m *Metrics) PlanCacheMiss(domain string) {
+	m.planCache.WithLabelValues(domainLabel(domain), "miss").Inc()
 }

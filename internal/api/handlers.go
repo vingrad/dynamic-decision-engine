@@ -35,6 +35,7 @@ func (s *Server) handleCreateGoal(w http.ResponseWriter, r *http.Request) {
 	}
 	goal, err := s.svc.CreateGoal(r.Context(), app.CreateGoalInput{
 		PlayerID:  req.PlayerID,
+		Domain:    req.Domain,
 		Objective: req.Objective,
 		Metric:    req.Metric,
 		Target:    req.Target,
@@ -127,12 +128,29 @@ func (s *Server) handleCreateSignal(w http.ResponseWriter, r *http.Request) {
 		writeServiceError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, SignalResponse{
+	// Asynchronous acceptance returns 202; synchronous (inline) replanning returns 200.
+	code := http.StatusOK
+	if result.Status == app.StatusPending {
+		code = http.StatusAccepted
+	}
+	writeJSON(w, code, SignalResponse{
 		Signal:      result.Signal,
+		Status:      string(result.Status),
 		Material:    result.Material,
 		Reason:      result.Reason,
 		PlanVersion: result.PlanVersion,
 	})
+}
+
+// handleGetSignal returns a stored signal and its replanning status (for polling
+// the outcome of an asynchronously-processed signal).
+func (s *Server) handleGetSignal(w http.ResponseWriter, r *http.Request) {
+	signal, err := s.svc.GetSignal(r.Context(), chi.URLParam(r, "id"))
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, signal)
 }
 
 // --- Outcomes ----------------------------------------------------------------
@@ -166,6 +184,7 @@ func (s *Server) handleEvaluate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	version, err := s.svc.Evaluate(r.Context(), app.EvaluateInput{
+		Domain:     req.Domain,
 		Objective:  req.Objective,
 		Metric:     req.Metric,
 		Target:     req.Target,

@@ -59,6 +59,10 @@ func cloneSignal(s domain.Signal) domain.Signal {
 		}
 		s.Payload = pl
 	}
+	if s.ProcessedAt != nil {
+		t := *s.ProcessedAt
+		s.ProcessedAt = &t
+	}
 	return s
 }
 
