@@ -18,7 +18,8 @@ const anthropicPromptVersion = "anthropic-v1"
 
 // defaultAnthropicModel is used when no model is configured. Opus is the most
 // capable tier and the right default for a reasoning-heavy planner.
-const defaultAnthropicModel = string(anthropic.ModelClaudeOpus4_8)
+// (anthropic.Model is an alias for string.)
+const defaultAnthropicModel = anthropic.ModelClaudeOpus4_8
 
 // AnthropicConfig configures the Anthropic-backed planner.
 type AnthropicConfig struct {
@@ -53,7 +54,7 @@ func NewAnthropicPlanner(cfg AnthropicConfig) *AnthropicPlanner {
 	}
 	return &AnthropicPlanner{
 		client:    anthropic.NewClient(opts...),
-		model:     anthropic.Model(model),
+		model:     model,
 		maxTokens: maxTokens,
 	}
 }
@@ -163,7 +164,7 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 		}
 	}
 
-	modelName := string(p.model)
+	modelName := p.model
 	prov := domain.DecisionProvenance{
 		ReasoningSummary: dto.ReasoningSummary,
 		InputSnapshotID:  inputSnapshotID(g, req.SignalNote),

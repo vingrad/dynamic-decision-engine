@@ -11,12 +11,15 @@ import (
 func (s *Server) Handler() http.Handler {
 	r := chi.NewRouter()
 
-	// Middleware chain: request IDs, real IP, structured logging, panic recovery,
+	// Middleware chain: request IDs, structured logging, panic recovery,
 	// per-request timeout and Prometheus metrics. Order matters — RequestID first
 	// so it is available to everything downstream; Recoverer late so it wraps
 	// handler panics; metrics outermost-but-after-routing via RoutePattern.
+	//
+	// chi's RealIP is intentionally omitted: it trusts client-supplied
+	// X-Forwarded-For / X-Real-IP headers and is spoofable unless a trusted proxy
+	// sets them. Add it back behind a proxy that strips inbound forwarding headers.
 	r.Use(middleware.RequestID)
-	r.Use(middleware.RealIP)
 	r.Use(s.requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(middleware.Timeout(s.cfg.RequestTimeout))
