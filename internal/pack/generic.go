@@ -1,7 +1,5 @@
 package pack
 
-import "github.com/vingrad/dynamic-decision-engine/internal/domain"
-
 // genericPack is the default domain. Its prompt template is intentionally empty so
 // that the planner's base system prompt is used unchanged — generic goals behave
 // byte-for-byte as they did before multi-domain support existed.
@@ -18,16 +16,13 @@ func genericPack() Descriptor {
 			ConstraintKinds: []string{"budget", "time", "geography", "policy", "risk"},
 			SignalKinds:     []string{"competitor", "customer", "internal", "external"},
 		},
-		Validate: func(g domain.Goal) []ValidationIssue {
-			var issues []ValidationIssue
-			if len(g.Context.Assets) == 0 && len(g.Context.Constraints) == 0 {
-				issues = append(issues, ValidationIssue{
-					Field:    "context",
-					Message:  "no assets or constraints provided; plans will be generic",
-					Severity: SeverityWarning,
-				})
-			}
-			return issues
-		},
+		Validation: Validation{Rules: []ValidationRule{
+			{
+				Check:    CheckRequireContext,
+				Field:    "context",
+				Message:  "no assets or constraints provided; plans will be generic",
+				Severity: SeverityWarning,
+			},
+		}},
 	}
 }
