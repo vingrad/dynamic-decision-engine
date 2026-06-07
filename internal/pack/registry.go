@@ -11,13 +11,22 @@ type Registry struct {
 
 // NewRegistry builds the registry of built-in packs with "generic" as the default.
 func NewRegistry() *Registry {
+	return NewRegistryFrom()
+}
+
+// NewRegistryFrom builds the registry of built-in packs plus any extra
+// descriptors supplied by the caller (registered after the built-ins, so an extra
+// descriptor may override a built-in of the same ID). "generic" remains the
+// default. This is the seam for adding domains beyond the compiled-in set.
+func NewRegistryFrom(extra ...Descriptor) *Registry {
 	r := &Registry{packs: map[string]Descriptor{}}
-	for _, d := range []Descriptor{
+	builtins := []Descriptor{
 		genericPack(),
 		investingPack(),
 		growthPack(),
 		careerPack(),
-	} {
+	}
+	for _, d := range append(builtins, extra...) {
 		r.packs[d.ID] = d
 	}
 	r.fallback = r.packs[DefaultDomain]

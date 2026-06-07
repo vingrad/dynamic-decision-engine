@@ -30,9 +30,9 @@ func TestBuildPlannerRouterRoutes(t *testing.T) {
 		t.Fatal(err)
 	}
 	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
-		Base:       llm.NewMockPlanner(),
-		Provider:   prov,
-		FinanceNow: func() time.Time { return time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC) },
+		Base:        llm.NewMockPlanner(),
+		DataSources: map[string]DataSource{"marketdata": prov},
+		FinanceNow:  func() time.Time { return time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC) },
 	})
 
 	// Investing -> finance planner (numeric), provenance reflects it.
@@ -70,7 +70,7 @@ func TestFinanceCacheTTLRefreshes(t *testing.T) {
 
 	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
 		Base:         llm.NewMockPlanner(),
-		Provider:     prov,
+		DataSources:  map[string]DataSource{"marketdata": prov},
 		FinanceCache: financeCache,
 		FinanceNow:   clock,
 	})

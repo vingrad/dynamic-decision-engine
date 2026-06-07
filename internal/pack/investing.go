@@ -40,6 +40,7 @@ func investingPack() Descriptor {
 		Version:        "1",
 		PromptVersion:  "investing-v1",
 		PromptTemplate: investingPromptTemplate,
+		PlannerKind:    "finance",
 		Eval:           EvaluatorConfig{ConfidenceDelta: 0.05},
 		Scoring:        &scoring,
 		Vocab: Vocabulary{

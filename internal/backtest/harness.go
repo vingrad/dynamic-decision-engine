@@ -32,9 +32,9 @@ type Harness struct {
 func New(reg *pack.Registry, pol policy.Policy, provider marketdata.Provider) *Harness {
 	sim := &simClock{}
 	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
-		Base:       llm.NewMockPlanner(),
-		Provider:   provider,
-		FinanceNow: sim.Now,
+		Base:        llm.NewMockPlanner(),
+		DataSources: map[string]wire.DataSource{"marketdata": provider},
+		FinanceNow:  sim.Now,
 	})
 	eng := engine.New(router,
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),

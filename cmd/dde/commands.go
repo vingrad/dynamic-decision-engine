@@ -102,6 +102,16 @@ func newProvider(cfg config.Config) (marketdata.Provider, error) {
 	return marketdata.NewOfflineProvider()
 }
 
+// marketDataSources wraps a market-data provider as the wire DataSources registry
+// entry numeric domains look up. Returns nil when no provider is configured so the
+// finance builder declines and investing falls back to the guided text planner.
+func marketDataSources(provider marketdata.Provider) map[string]wire.DataSource {
+	if provider == nil {
+		return nil
+	}
+	return map[string]wire.DataSource{"marketdata": provider}
+}
+
 // newEngine assembles the multi-domain engine: a per-domain planner router (with
 // optional plan cache and the finance planner for investing) plus a per-domain
 // evaluator resolver, both built from the pack registry overlaid with policy. The
@@ -123,7 +133,7 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 	}
 	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
 		Base:         newPlanner(cfg),
-		Provider:     provider,
+		DataSources:  marketDataSources(provider),
 		Cache:        cache,
 		FinanceCache: financeCache,
 		CacheObs:     cacheObs,
