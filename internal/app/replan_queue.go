@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"runtime/debug"
 	"sync"
 	"time"
 
@@ -227,14 +229,27 @@ func (q *MemoryQueue) work() {
 // runJob invokes the handler under a per-job deadline (when configured), so a hung
 // planner is cancelled rather than wedging the worker forever. The deadline bounds
 // the whole handler, including its internal conflict/transient retries.
-func (q *MemoryQueue) runJob(job ReplanJob) error {
+//
+// A handler panic is recovered and returned as an error so the worker survives and
+// keeps draining — otherwise the goroutine would die mid-drain, leaving queued[plan]
+// stuck true and the plan silently wedged. The panicked job's signal stays pending
+// (the handler aborted before marking it) and is re-enqueued by RecoverPending on
+// the next restart.
+func (q *MemoryQueue) runJob(job ReplanJob) (err error) {
 	ctx := context.Background()
 	if q.timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, q.timeout)
 		defer cancel()
 	}
-	_, err := q.handler(ctx, job)
+	defer func() {
+		if r := recover(); r != nil {
+			q.log.Error("async replan panicked", "plan_id", job.PlanID,
+				"signal_id", job.SignalID, "panic", r, "stack", string(debug.Stack()))
+			err = fmt.Errorf("replan panicked: %v", r)
+		}
+	}()
+	_, err = q.handler(ctx, job)
 	return err
 }
 
