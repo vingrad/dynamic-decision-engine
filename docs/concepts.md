@@ -14,7 +14,7 @@ concept maps to a Go type in `internal/domain`.
 | **ActionPath** | A ranked sequence/branch of moves — represented as the ordered `ranked_moves` of a plan version. |
 | **Experiment** | A testable, time-boxed action attached to a move, with success signals and kill/pivot criteria. |
 | **Signal** | New information that may require replanning (a market shift, a result, a changed constraint). |
-| **Outcome** | The recorded result of a move or experiment. Closes the learning loop. |
+| **Outcome** | The recorded result of a move, addressed by its stable `(plan_version, move_rank)` location in the immutable plan. Closes the learning loop. |
 | **Plan** | The mutable head pointing at the current strategy for a goal. |
 | **PlanVersion** | An immutable, versioned snapshot of a plan. Append-only. |
 | **DecisionProvenance** | The explanation of why a plan/version was generated — reasoning summary, input snapshot, planner, prompt version, model. |

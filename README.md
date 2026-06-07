@@ -261,7 +261,10 @@ A new piece of information that may change the plan.
 
 ### Outcome
 
-A real-world result produced by an executed move or experiment.
+A real-world result produced by an executed move. It references the move by its
+stable address in the immutable plan — `(plan_version, move_rank)` — and the move
+title is snapshotted server-side, so an outcome always points at the exact move
+that was acted on even after later replans regenerate the move set.
 
 ### Plan Version
 

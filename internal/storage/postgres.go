@@ -337,16 +337,16 @@ func (r *PostgresRepository) CreateOutcome(ctx context.Context, o *domain.Outcom
 		return err
 	}
 	_, err = r.pool.Exec(ctx, `
-		INSERT INTO outcome (id, goal_id, move_title, result, observed_signals, notes, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-		o.ID, o.GoalID, o.MoveTitle, string(o.Result), observed, o.Notes, o.CreatedAt)
+		INSERT INTO outcome (id, goal_id, plan_version, move_rank, move_title, result, observed_signals, notes, created_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+		o.ID, o.GoalID, o.PlanVersion, o.MoveRank, o.MoveTitle, string(o.Result), observed, o.Notes, o.CreatedAt)
 	return mapError(err)
 }
 
 func (r *PostgresRepository) ListOutcomes(ctx context.Context, goalID string, page Page) ([]domain.Outcome, error) {
 	page = page.Normalize()
 	rows, err := r.pool.Query(ctx, `
-		SELECT id, goal_id, move_title, result, observed_signals, notes, created_at
+		SELECT id, goal_id, plan_version, move_rank, move_title, result, observed_signals, notes, created_at
 		FROM outcome WHERE goal_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3`,
 		goalID, page.Limit, page.Offset)
 	if err != nil {
@@ -359,7 +359,7 @@ func (r *PostgresRepository) ListOutcomes(ctx context.Context, goalID string, pa
 		var o domain.Outcome
 		var result string
 		var observed []byte
-		if err := rows.Scan(&o.ID, &o.GoalID, &o.MoveTitle, &result, &observed, &o.Notes, &o.CreatedAt); err != nil {
+		if err := rows.Scan(&o.ID, &o.GoalID, &o.PlanVersion, &o.MoveRank, &o.MoveTitle, &result, &observed, &o.Notes, &o.CreatedAt); err != nil {
 			return nil, mapError(err)
 		}
 		o.Result = domain.OutcomeResult(result)

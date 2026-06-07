@@ -164,6 +164,50 @@ func TestValidationErrors(t *testing.T) {
 	}
 }
 
+func TestRecordOutcomeFlow(t *testing.T) {
+	h := newTestServer()
+
+	// Create goal + plan.
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{
+		Objective: "Grow to 1000 customers", Metric: "customers",
+		Context: domain.Context{Assets: []domain.Asset{{Name: "network"}}},
+	})
+	goal := decode[domain.Goal](t, rec.Body)
+	rec = doJSON(t, h, http.MethodPost, "/v1/goals/"+goal.ID+"/plans", nil)
+	v1 := decode[domain.PlanVersion](t, rec.Body)
+	top := v1.RankedMoves[0]
+
+	// Happy path: record an outcome against a real (version, rank).
+	rec = doJSON(t, h, http.MethodPost, "/v1/outcomes", CreateOutcomeRequest{
+		GoalID: goal.ID, PlanVersion: v1.Version, MoveRank: top.Rank, Result: domain.OutcomePartial,
+	})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d: %s", rec.Code, rec.Body)
+	}
+	out := decode[domain.Outcome](t, rec.Body)
+	if out.MoveTitle != top.Title {
+		t.Errorf("expected server-derived title %q, got %q", top.Title, out.MoveTitle)
+	}
+
+	// Out-of-range rank -> 400.
+	rec = doJSON(t, h, http.MethodPost, "/v1/outcomes", CreateOutcomeRequest{
+		GoalID: goal.ID, PlanVersion: v1.Version, MoveRank: len(v1.RankedMoves) + 1, Result: domain.OutcomeSuccess,
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for out-of-range rank, got %d", rec.Code)
+	}
+
+	// Goal with no plan -> 409 (same contract as the signal path).
+	rec = doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{Objective: "no plan yet"})
+	noPlan := decode[domain.Goal](t, rec.Body)
+	rec = doJSON(t, h, http.MethodPost, "/v1/outcomes", CreateOutcomeRequest{
+		GoalID: noPlan.ID, PlanVersion: 1, MoveRank: 1, Result: domain.OutcomeSuccess,
+	})
+	if rec.Code != http.StatusConflict {
+		t.Errorf("expected 409 for goal without a plan, got %d", rec.Code)
+	}
+}
+
 func TestEvaluateStateless(t *testing.T) {
 	h := newTestServer()
 	rec := doJSON(t, h, http.MethodPost, "/v1/evaluate", EvaluateRequest{

@@ -163,7 +163,8 @@ func (s *Server) handleCreateOutcome(w http.ResponseWriter, r *http.Request) {
 	}
 	outcome, err := s.svc.RecordOutcome(r.Context(), app.OutcomeInput{
 		GoalID:          req.GoalID,
-		MoveTitle:       req.MoveTitle,
+		PlanVersion:     req.PlanVersion,
+		MoveRank:        req.MoveRank,
 		Result:          req.Result,
 		ObservedSignals: req.ObservedSignals,
 		Notes:           req.Notes,

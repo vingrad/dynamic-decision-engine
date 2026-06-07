@@ -23,10 +23,14 @@ type SignalInput struct {
 	Payload     map[string]any
 }
 
-// OutcomeInput is the input to RecordOutcome.
+// OutcomeInput is the input to RecordOutcome. The move is referenced by its
+// stable address in the goal's immutable plan: PlanVersion + MoveRank. The move
+// title is not accepted from the caller — it is resolved and snapshotted server
+// side from that address.
 type OutcomeInput struct {
 	GoalID          string
-	MoveTitle       string
+	PlanVersion     int
+	MoveRank        int
 	Result          domain.OutcomeResult
 	ObservedSignals []string
 	Notes           string

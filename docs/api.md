@@ -82,13 +82,20 @@ Returns `200`:
 ## Outcomes
 
 ### `POST /v1/outcomes`
-Record the result of a move/experiment.
+Record the result of a move. The move is referenced by its stable address in the
+goal's plan — `plan_version` plus the move's `move_rank` (the `rank` field from
+that version's `ranked_moves`). Both are required.
 
 ```json
-{ "goal_id": "goal_...", "move_title": "Double down on founder network", "result": "partial", "notes": "early signal positive" }
+{ "goal_id": "goal_...", "plan_version": 2, "move_rank": 1, "result": "partial", "notes": "early signal positive" }
 ```
 
 `result` is one of `success`, `failure`, `partial`, `inconclusive`.
+
+The stored outcome carries a `move_title` resolved server-side from
+`(plan_version, move_rank)` — it is returned in the response, never accepted as
+input. Errors: a missing/unknown `plan_version` or a `move_rank` not present in
+that version returns `400`; a goal with no plan yet returns `409`.
 
 ## Evaluate (stateless)
 

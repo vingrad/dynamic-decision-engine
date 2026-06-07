@@ -291,7 +291,10 @@ func (s *Service) GetSignal(ctx context.Context, id string) (domain.Signal, erro
 	return s.repo.GetSignal(ctx, id)
 }
 
-// RecordOutcome validates and stores an outcome for a move or experiment.
+// RecordOutcome validates and stores an outcome for a move. The move is
+// referenced by its stable (plan version, rank) address in the goal's immutable
+// plan; the title is resolved and snapshotted server side. Referencing a move that
+// did not exist in that version is rejected.
 func (s *Service) RecordOutcome(ctx context.Context, in OutcomeInput) (domain.Outcome, error) {
 	if in.GoalID == "" {
 		return domain.Outcome{}, invalid("goal_id is required")
@@ -299,10 +302,37 @@ func (s *Service) RecordOutcome(ctx context.Context, in OutcomeInput) (domain.Ou
 	if !in.Result.Valid() {
 		return domain.Outcome{}, invalid("result must be one of: success, failure, partial, inconclusive")
 	}
+	if in.PlanVersion <= 0 {
+		return domain.Outcome{}, invalid("plan_version is required")
+	}
+
+	plan, err := s.repo.GetPlanByGoal(ctx, in.GoalID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return domain.Outcome{}, ErrNoPlanForGoal
+		}
+		return domain.Outcome{}, err
+	}
+
+	version, err := s.repo.GetPlanVersion(ctx, plan.ID, in.PlanVersion)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return domain.Outcome{}, invalid(fmt.Sprintf("plan version %d not found for goal", in.PlanVersion))
+		}
+		return domain.Outcome{}, err
+	}
+
+	move, ok := moveByRank(version.RankedMoves, in.MoveRank)
+	if !ok {
+		return domain.Outcome{}, invalid(fmt.Sprintf("move_rank %d not found in plan version %d", in.MoveRank, version.Version))
+	}
+
 	outcome := domain.Outcome{
 		ID:              domain.NewID("out"),
 		GoalID:          in.GoalID,
-		MoveTitle:       in.MoveTitle,
+		PlanVersion:     version.Version,
+		MoveRank:        in.MoveRank,
+		MoveTitle:       move.Title, // server-derived snapshot, not caller input
 		Result:          in.Result,
 		ObservedSignals: in.ObservedSignals,
 		Notes:           in.Notes,
@@ -312,6 +342,18 @@ func (s *Service) RecordOutcome(ctx context.Context, in OutcomeInput) (domain.Ou
 		return domain.Outcome{}, err
 	}
 	return outcome, nil
+}
+
+// moveByRank returns the move with the given rank within a version's ranked moves.
+// Ranks are 1-based and unique within a version; matching by rank value (rather
+// than slice index) is robust to any future ranking convention.
+func moveByRank(moves []domain.RankedMove, rank int) (domain.RankedMove, bool) {
+	for _, m := range moves {
+		if m.Rank == rank {
+			return m, true
+		}
+	}
+	return domain.RankedMove{}, false
 }
 
 // Ping checks that the underlying storage is reachable (used for readiness).

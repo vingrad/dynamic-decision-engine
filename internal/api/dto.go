@@ -32,10 +32,13 @@ type CreateSignalRequest struct {
 	Payload     map[string]any `json:"payload"`
 }
 
-// CreateOutcomeRequest is the body for POST /v1/outcomes.
+// CreateOutcomeRequest is the body for POST /v1/outcomes. The move is referenced
+// by its (plan_version, move_rank) address in the goal's plan; the resulting
+// outcome carries the server-resolved move_title (it is not accepted as input).
 type CreateOutcomeRequest struct {
 	GoalID          string               `json:"goal_id"`
-	MoveTitle       string               `json:"move_title"`
+	PlanVersion     int                  `json:"plan_version"`
+	MoveRank        int                  `json:"move_rank"`
 	Result          domain.OutcomeResult `json:"result"`
 	ObservedSignals []string             `json:"observed_signals"`
 	Notes           string               `json:"notes"`

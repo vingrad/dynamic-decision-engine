@@ -199,6 +199,110 @@ func TestApplySignalConcurrent(t *testing.T) {
 	}
 }
 
+func TestRecordOutcomeResolvesMove(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	g := makeGoal(t, s)
+	v1, err := s.GeneratePlan(ctx, g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := v1.RankedMoves[0]
+
+	out, err := s.RecordOutcome(ctx, OutcomeInput{
+		GoalID:      g.ID,
+		PlanVersion: v1.Version,
+		MoveRank:    want.Rank,
+		Result:      domain.OutcomePartial,
+		Notes:       "early signal positive",
+	})
+	if err != nil {
+		t.Fatalf("record outcome: %v", err)
+	}
+	if out.PlanVersion != v1.Version || out.MoveRank != want.Rank {
+		t.Fatalf("unexpected address: version=%d rank=%d", out.PlanVersion, out.MoveRank)
+	}
+	if out.MoveTitle != want.Title {
+		t.Errorf("title not snapshotted server side: got %q want %q", out.MoveTitle, want.Title)
+	}
+}
+
+func TestRecordOutcomeRejectsUnknownRank(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	g := makeGoal(t, s)
+	v1, err := s.GeneratePlan(ctx, g.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = s.RecordOutcome(ctx, OutcomeInput{
+		GoalID:      g.ID,
+		PlanVersion: v1.Version,
+		MoveRank:    len(v1.RankedMoves) + 1, // out of range
+		Result:      domain.OutcomeSuccess,
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for unknown rank, got %v", err)
+	}
+}
+
+func TestRecordOutcomeRejectsUnknownVersion(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	g := makeGoal(t, s)
+	if _, err := s.GeneratePlan(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.RecordOutcome(ctx, OutcomeInput{
+		GoalID:      g.ID,
+		PlanVersion: 99,
+		MoveRank:    1,
+		Result:      domain.OutcomeSuccess,
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError for unknown version, got %v", err)
+	}
+}
+
+func TestRecordOutcomeRequiresPlanVersion(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	g := makeGoal(t, s)
+	if _, err := s.GeneratePlan(ctx, g.ID); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := s.RecordOutcome(ctx, OutcomeInput{
+		GoalID:   g.ID,
+		MoveRank: 1,
+		Result:   domain.OutcomeSuccess,
+	})
+	var ve *ValidationError
+	if !errors.As(err, &ve) {
+		t.Fatalf("expected ValidationError when plan_version omitted, got %v", err)
+	}
+}
+
+func TestRecordOutcomeRequiresPlan(t *testing.T) {
+	s := newTestService()
+	ctx := context.Background()
+	g := makeGoal(t, s) // goal exists but no plan generated
+
+	_, err := s.RecordOutcome(ctx, OutcomeInput{
+		GoalID:      g.ID,
+		PlanVersion: 1,
+		MoveRank:    1,
+		Result:      domain.OutcomeSuccess,
+	})
+	if !errors.Is(err, ErrNoPlanForGoal) {
+		t.Fatalf("expected ErrNoPlanForGoal, got %v", err)
+	}
+}
+
 func versionNums(vs []domain.PlanVersion) []int {
 	out := make([]int, len(vs))
 	for i, v := range vs {

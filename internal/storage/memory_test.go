@@ -49,6 +49,34 @@ func TestMemoryGoalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMemoryOutcomeRoundTrip(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+
+	o := &domain.Outcome{
+		ID:          "out_1",
+		GoalID:      "goal_1",
+		PlanVersion: 2,
+		MoveRank:    1,
+		MoveTitle:   "Double down on founder network",
+		Result:      domain.OutcomePartial,
+		CreatedAt:   time.Now().UTC(),
+	}
+	if err := repo.CreateOutcome(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	got, err := repo.ListOutcomes(ctx, "goal_1", Page{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("expected 1 outcome, got %d", len(got))
+	}
+	if got[0].PlanVersion != 2 || got[0].MoveRank != 1 || got[0].MoveTitle != o.MoveTitle {
+		t.Errorf("move reference not preserved: %+v", got[0])
+	}
+}
+
 func TestMemoryPlanVersionsAppendOnly(t *testing.T) {
 	repo := NewMemory()
 	ctx := context.Background()
