@@ -50,6 +50,7 @@ Goal
   + Constraints
   + Signals
   + Outcomes
+  + Live data (fetched from external sources at decision time)
         ↓
 Decision Engine
         ↓
@@ -194,7 +195,38 @@ DDE_PLANNER=multi DDE_MULTI_MODE=ensemble DDE_MULTI_PROVIDERS=mock,mock \
 
 ---
 
-### 4. Built as infrastructure
+### 4. Decisions can pull live data
+
+A goal's context goes stale the moment it's written. The engine can **fetch fresh
+state** (prices, availability, balances, research) right before planning and fold it
+into the goal context, so the planner reasons over the world *now* — not a snapshot
+from goal-creation time.
+
+Sources sit behind one mechanism-agnostic interface: **HTTP/REST, MCP servers,
+autonomous AI agents, and in-process read-models** all look the same to the engine. A
+domain declares which sources it consults; non-deterministic sources (agents, live
+APIs) keep their non-determinism sealed inside the fetch, and every source consulted
+is recorded in provenance.
+
+* **Deterministic & auditable** — fetched data lands in the input snapshot, so the
+  same world-state always reproduces the same decision; raw payloads, fetch times and
+  source identity are kept for audit.
+* **Opt-in & safe** — off by default (`DDE_SOURCES_ENABLED`), so the offline mock path
+  stays byte-for-byte reproducible.
+* **Never blocks** — a source outage degrades to a *stale* contribution (optionally
+  serving a last-good cached value); the decision is still produced.
+
+```bash
+DDE_DOMAINS=examples/domains.yaml \
+DDE_SOURCES_ENABLED=true DDE_SOURCES=examples/sources.yaml \
+dde evaluate --input examples/purchasing-goal.json
+```
+
+> 📖 **Wiring sources, the source interface, and the agentic-planner roadmap:** [`docs/domains.md`](docs/domains.md)
+
+---
+
+### 5. Built as infrastructure
 
 The project is designed as a backend system, not a prompt collection.
 
@@ -259,6 +291,15 @@ Each experiment can define:
 
 A new piece of information that may change the plan.
 
+### Data Source
+
+An external provider the engine consults *before* planning to enrich the goal context
+with live state (prices, availability, research). Where a **Signal** is pushed in to
+say "something changed, reconsider", a **Data Source** is pulled at decision time to
+answer "what is true right now". Sources are pluggable — HTTP/REST, MCP servers, AI
+agents, or in-process read-models — behind one interface, and each is recorded in
+provenance.
+
 ### Outcome
 
 A real-world result produced by an executed move. It references the move by its
@@ -299,7 +340,7 @@ thresholds, scoring tunables, vocabulary and validation. Four ship today:
 `generic` (default), `investing` (with an optional numeric scoring planner and
 point-in-time market data), `growth` and `career`.
 
-> 📖 **Domains, the investing pack, policy, async replanning and backtesting:** [`docs/domains.md`](docs/domains.md)
+> 📖 **Domains, the investing pack, external data sources, policy, async replanning and backtesting:** [`docs/domains.md`](docs/domains.md)
 
 ---
 
@@ -482,6 +523,7 @@ More LLM providers, local / self-hosted inference, authentication, richer scorin
 * [x] Config-as-data policy (per-domain scoring/materiality tunables)
 * [x] Async, FIFO-per-plan replanning + durable signal status + plan cache (TTL for finance)
 * [x] Per-domain metrics
+* [x] Pluggable external data sources (HTTP/MCP/AI-agent/read-model; deterministic pre-fetch, provenance-tracked)
 * [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Real market-data vendor (HTTP provider stub in place)
 * [ ] OpenTelemetry tracing
