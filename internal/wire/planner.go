@@ -40,6 +40,11 @@ type PlannerDeps struct {
 func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps) llm.Planner {
 	cached := deps.Base
 	if deps.Cache != nil {
+		// The text/LLM cache has no TTL: identical decision inputs reuse one result
+		// for the process lifetime. This intentionally also memoises multi-model
+		// compositions (verify/route/ensemble) by input snapshot — same semantics as
+		// caching a single LLM. Finance, whose output depends on as-of market data,
+		// uses the separate TTL cache below instead.
 		cached = llm.NewCachingPlanner(deps.Base, deps.Cache, deps.CacheObs)
 	}
 

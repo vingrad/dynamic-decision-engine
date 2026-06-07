@@ -122,6 +122,7 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 		Planner:          "finance",
 		PromptVersion:    financePromptVersion,
 		Model:            "none",
+		Strategy:         "single",
 		PackID:           p.packID,
 		PackVersion:      p.packVersion,
 	}

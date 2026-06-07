@@ -103,7 +103,10 @@ func (p *OpenAIPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Plan
 		return PlanResult{}, err
 	}
 	properties, required := planSchema()
-	raw, inv, err := p.callStructured(ctx, systemPrompt, userPayload, planToolName, properties, required)
+	// Domain packs inject prompt guidance via the GuidedPlanner; an empty override
+	// leaves the base system prompt (and generic behaviour) unchanged.
+	sys := effectiveSystemPrompt(systemPrompt, req.SystemPromptOverride)
+	raw, inv, err := p.callStructured(ctx, sys, userPayload, planToolName, properties, required)
 	if err != nil {
 		return PlanResult{}, err
 	}

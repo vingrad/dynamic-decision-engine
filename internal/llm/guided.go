@@ -58,8 +58,14 @@ func (g *GuidedPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Plan
 	}
 	res.Provenance.PackID = g.packID
 	res.Provenance.PackVersion = g.packVersion
+	// Record the pack's prompt contract alongside the model's, rather than
+	// overwriting it, so provenance keeps both (e.g. "anthropic-v1+investing-v1").
 	if g.promptVersion != "" {
-		res.Provenance.PromptVersion = g.promptVersion
+		if res.Provenance.PromptVersion != "" {
+			res.Provenance.PromptVersion += "+" + g.promptVersion
+		} else {
+			res.Provenance.PromptVersion = g.promptVersion
+		}
 	}
 	return res, nil
 }

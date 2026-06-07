@@ -11,10 +11,11 @@ import (
 // recordingPlanner records the last request it saw and counts calls. It returns a
 // fixed result so tests can observe routing/caching/guidance behaviour.
 type recordingPlanner struct {
-	name  string
-	last  PlanRequest
-	calls int
-	err   error
+	name                    string
+	provenancePromptVersion string
+	last                    PlanRequest
+	calls                   int
+	err                     error
 }
 
 func (r *recordingPlanner) Name() string { return r.name }
@@ -28,7 +29,7 @@ func (r *recordingPlanner) GeneratePlan(_ context.Context, req PlanRequest) (Pla
 	return PlanResult{
 		Summary:     "ok",
 		RankedMoves: []domain.RankedMove{{Rank: 1, Title: "m", Confidence: 0.5}},
-		Provenance:  domain.DecisionProvenance{Planner: r.name},
+		Provenance:  domain.DecisionProvenance{Planner: r.name, PromptVersion: r.provenancePromptVersion},
 	}, nil
 }
 
@@ -56,11 +57,26 @@ func TestGuidedPlannerStampsProvenanceAndPrompt(t *testing.T) {
 	if res.Provenance.PackID != "investing" || res.Provenance.PackVersion != "1" {
 		t.Errorf("provenance pack id/version not stamped: %+v", res.Provenance)
 	}
+	// The base planner here sets no prompt version, so the pack's stands alone.
 	if res.Provenance.PromptVersion != "investing-v1" {
 		t.Errorf("prompt version not stamped: %q", res.Provenance.PromptVersion)
 	}
 	if g.Name() != "mock" {
 		t.Errorf("guided Name should defer to base, got %q", g.Name())
+	}
+}
+
+// TestGuidedPlannerCombinesPromptVersion: when the base planner reports its own
+// prompt version, the guided planner keeps both rather than overwriting it.
+func TestGuidedPlannerCombinesPromptVersion(t *testing.T) {
+	base := &recordingPlanner{name: "anthropic", provenancePromptVersion: "anthropic-v1"}
+	g := NewGuidedPlanner(base, GuidedConfig{PackID: "growth", PackVersion: "1", PromptVersion: "growth-v1", PromptTemplate: "GROWTH"})
+	res, err := g.GeneratePlan(context.Background(), PlanRequest{Goal: domain.Goal{Domain: "growth", Objective: "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.PromptVersion != "anthropic-v1+growth-v1" {
+		t.Errorf("expected combined prompt version, got %q", res.Provenance.PromptVersion)
 	}
 }
 
