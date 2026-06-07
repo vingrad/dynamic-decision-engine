@@ -36,6 +36,11 @@ type Vocabulary struct {
 // it into an engine.Evaluator (engine.ThresholdEvaluator{ConfidenceDelta}).
 type EvaluatorConfig struct {
 	ConfidenceDelta float64 `json:"confidence_delta"`
+
+	// IgnoreSignalKinds lists signal kinds the domain never replans on. A signal of
+	// one of these kinds is short-circuited by the engine's replan gate before any
+	// (expensive) plan regeneration. Empty means every kind triggers a replan.
+	IgnoreSignalKinds []string `json:"ignore_signal_kinds,omitempty"`
 }
 
 // Severity classifies a validation finding.

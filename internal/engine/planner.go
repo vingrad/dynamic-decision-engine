@@ -12,10 +12,11 @@ import (
 // Engine generates plans and drives the replanning loop. It is safe for
 // concurrent use provided its Planner and Evaluator are.
 type Engine struct {
-	planner   llm.Planner
-	evaluator Evaluator
-	resolver  EvaluatorResolver
-	clock     func() time.Time
+	planner      llm.Planner
+	evaluator    Evaluator
+	resolver     EvaluatorResolver
+	gateResolver GateResolver
+	clock        func() time.Time
 }
 
 // Option customises an Engine.
@@ -32,6 +33,14 @@ func WithEvaluator(e Evaluator) Option {
 // default evaluator, preserving the original behaviour.
 func WithEvaluatorResolver(r EvaluatorResolver) Option {
 	return func(en *Engine) { en.resolver = r }
+}
+
+// WithGateResolver enables per-domain replan pre-filtering. When set, the engine
+// asks the domain's ReplanGate whether a signal warrants regeneration before
+// calling the planner; when nil every signal proceeds, preserving original
+// behaviour.
+func WithGateResolver(r GateResolver) Option {
+	return func(en *Engine) { en.gateResolver = r }
 }
 
 // WithClock overrides the time source (useful for deterministic tests).
@@ -77,6 +86,15 @@ func (e *Engine) evaluatorFor(goal domain.Goal) Evaluator {
 		return e.evaluator
 	}
 	return e.resolver.EvaluatorFor(goal.Domain)
+}
+
+// gateFor returns the replan pre-filter for a goal's domain, or nil when no gate
+// resolver is configured (in which case every signal proceeds to regeneration).
+func (e *Engine) gateFor(goal domain.Goal) ReplanGate {
+	if e.gateResolver == nil {
+		return nil
+	}
+	return e.gateResolver.GateFor(goal.Domain)
 }
 
 // buildVersion assembles an immutable PlanVersion from a planner result.

@@ -66,11 +66,19 @@ func (c *CachingPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 
 // cacheKey fingerprints everything that can change the output: the base planner,
 // the decision-input snapshot (goal+context+domain+signal note), the prompt
-// override (which encodes the pack/prompt version), and any structured signal
-// payload that numeric planners read.
+// override (which encodes the pack/prompt version), any structured signal payload
+// that numeric planners read, and the current plan's move keys (which steer key
+// continuity on a replan).
 func cacheKey(name string, req PlanRequest) string {
 	payload, _ := json.Marshal(req.SignalPayload)
-	h := sha256.Sum256(append([]byte(req.SystemPromptOverride+"\x00"), payload...))
+	currentKeys := make([]string, len(req.CurrentMoves))
+	for i, m := range req.CurrentMoves {
+		currentKeys[i] = m.Key
+	}
+	current, _ := json.Marshal(currentKeys)
+	buf := append([]byte(req.SystemPromptOverride+"\x00"), payload...)
+	buf = append(append(buf, '\x00'), current...)
+	h := sha256.Sum256(buf)
 	return name + "|" + inputSnapshotID(req.Goal, req.SignalNote) + "|" + hex.EncodeToString(h[:12])
 }
 

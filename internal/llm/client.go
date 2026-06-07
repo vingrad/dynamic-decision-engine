@@ -30,6 +30,11 @@ type PlanRequest struct {
 	// (domain.Signal.Payload). Numeric planners (e.g. the finance planner) parse it;
 	// text-only planners ignore it.
 	SignalPayload map[string]any
+
+	// CurrentMoves is the current plan's ranked moves on a replan. Text planners use
+	// it to preserve a move's stable Key when the move is semantically unchanged, so
+	// rewording a title does not read as a new plan. Nil for an initial plan.
+	CurrentMoves []domain.RankedMove
 }
 
 // PlanResult is a planner's output. The engine wraps this into an immutable
