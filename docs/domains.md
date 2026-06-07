@@ -102,6 +102,33 @@ JSON/YAML):
 }
 ```
 
+### Per-domain planner strategy
+
+A text domain can override the global reasoning backend (`DDE_PLANNER` /
+`DDE_MULTI_*` / `DDE_LLM_MODEL`) via a `planner` block — so one domain can run a
+multi-model ensemble while another uses a cheap single model:
+
+```yaml
+domains:
+  growth:
+    planner:
+      planner: multi              # mock | anthropic | openai | deepseek | multi
+      multi_mode: ensemble        # verify | route | ensemble (when planner: multi)
+      multi_providers: [anthropic, openai]
+      model: claude-opus-4-8      # optional; overrides the global LLM model
+```
+
+Only non-empty fields override the global config (a spec with just `model` keeps
+the global strategy). Bad specs fail fast at startup — `multi` needs a valid mode
+and ≥2 providers, and `verify` needs a real verifier (not `mock`).
+
+Scope notes:
+- Applies to **text** domains only. The `investing` domain uses the numeric finance
+  planner, which ignores `planner` — tune it with `scoring` instead. (A `planner`
+  override on investing takes effect only if the finance planner declines, e.g.
+  offline with no market data.)
+- `backtest` constructs its own router and ignores per-domain planner overrides.
+
 ## Async replanning
 
 In `serve`, set `DDE_REPLAN_ASYNC=true` to process replanning on a background
