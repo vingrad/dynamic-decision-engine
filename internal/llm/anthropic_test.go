@@ -32,12 +32,12 @@ func TestClampConfidence(t *testing.T) {
 	}
 }
 
-func TestPlanInputSchemaShape(t *testing.T) {
-	schema := planInputSchema()
-	if _, ok := schema.Properties.(map[string]any)["ranked_moves"]; !ok {
+func TestPlanSchemaShape(t *testing.T) {
+	properties, required := planSchema()
+	if _, ok := properties["ranked_moves"]; !ok {
 		t.Fatal("schema missing ranked_moves")
 	}
-	if len(schema.Required) == 0 {
+	if len(required) == 0 {
 		t.Fatal("schema should declare required fields")
 	}
 }

@@ -154,11 +154,43 @@ That makes the system:
 * usable offline
 * suitable for CI
 * safe to run out of the box
+* private by default — in the default configuration the engine and all decision
+  data stay on your own hardware; nothing leaves the machine, which makes it a
+  good fit for a self-hosted home-server deployment (see [Quick start](#quick-start))
 
-A real **Anthropic Claude** planner ships behind the same interface — enable it
-with `DDE_PLANNER=anthropic` and an `ANTHROPIC_API_KEY`. It elicits the structured
-plan via forced tool use and records token usage and latency as provenance. The
-mock remains the default so the system runs offline and in CI with no key.
+Want real AI planning? Bring your own key. Real planners ship behind the same
+interface for **Anthropic Claude**, **OpenAI**, and **DeepSeek** — select one with
+`DDE_PLANNER=anthropic|openai|deepseek` (BYOK) and the matching API key
+(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Each elicits the
+structured plan via a forced tool/function call and records token usage and latency
+as provenance. (DeepSeek is served through the OpenAI-compatible adapter.) Note that
+enabling a cloud provider sends your inputs to that provider's API; the
+deterministic mock remains the default so the system runs fully local, offline, and
+in CI with no key.
+
+**Local AI inference is planned.** A self-hosted LLM planner (via an
+OpenAI-compatible endpoint — specific provider to be decided) is on the
+[roadmap](#roadmap), so AI-assisted planning will eventually run entirely on your
+own hardware with no cloud dependency. (The OpenAI-compatible adapter already
+accepts a custom endpoint via `DDE_LLM_BASE_URL`.)
+
+**Multi-model planning** (`DDE_PLANNER=multi`) composes models by *role*, each
+recorded in provenance for auditability:
+
+* **verify** — one provider proposes, a *different* provider critiques (drops weak
+  moves, re-calibrates confidence). Best for calibration + auditability.
+* **route** — a cheap model handles the common case; escalates to a stronger model
+  on low confidence or when a material signal arrives. A cost lever.
+* **ensemble** — several providers run in parallel; agreement on the top move
+  scales its confidence (divergence lowers it). An uncertainty signal.
+
+```bash
+# verify: Claude proposes, GPT reviews
+DDE_PLANNER=multi DDE_MULTI_MODE=verify DDE_MULTI_PROVIDERS=anthropic,openai dde serve
+# keyless offline demo (ensemble of two mock planners)
+DDE_PLANNER=multi DDE_MULTI_MODE=ensemble DDE_MULTI_PROVIDERS=mock,mock \
+  dde evaluate --input examples/founder-growth.json
+```
 
 ---
 
@@ -301,6 +333,11 @@ DATABASE_URL=postgres://dde:dde@localhost:5432/dde?sslmode=disable \
 
 ### Run the full stack (API + admin UI + observability)
 
+This is also the one-command **self-hosting** path: anyone can run the whole stack
+on a home server, NAS, or mini-PC that has Docker. In the default configuration
+all goals, plans, versions, and history stay on that machine — your data never
+leaves your hardware.
+
 ```bash
 docker compose up --build
 ```
@@ -413,7 +450,7 @@ The initial core is implemented and tested:
 * Prometheus metrics + Grafana dashboards
 * a minimal Next.js admin UI
 
-Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
+More LLM providers, local / self-hosted inference, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
 
 ---
 
@@ -434,14 +471,15 @@ Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper ad
 * [x] Prometheus metrics + Grafana dashboards
 * [x] Minimal admin UI
 * [x] Application/use-case layer with concurrency-safe replanning
-* [x] Anthropic Claude planner adapter (structured output via tool use)
+* [x] Pluggable LLM planners: Anthropic Claude, OpenAI, and DeepSeek (structured output via tool/function calls)
+* [x] Multi-model strategies: cross-model verify, cost routing, agreement ensemble (provenance-tracked)
 * [x] Multi-domain support (per-goal domain + pack registry + planner router)
 * [x] Domain packs and examples (generic, investing, growth, career)
 * [x] Investing pack: numeric scoring planner + point-in-time market data + backtesting
 * [x] Config-as-data policy (per-domain scoring/materiality tunables)
-* [x] Async, coalesced replanning + snapshot-keyed plan cache
+* [x] Async, FIFO-per-plan replanning + durable signal status + plan cache (TTL for finance)
 * [x] Per-domain metrics
-* [ ] OpenAI planner adapter (interface + placeholder in place)
+* [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Real market-data vendor (HTTP provider stub in place)
 * [ ] OpenTelemetry tracing
 * [ ] Authentication / authorization
@@ -461,6 +499,18 @@ Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper ad
 * Testable without external services
 
 ---
+
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind. The Dynamic Decision
+Engine generates plans, rankings, and recommendations — including output produced by
+large language models — that may be incomplete, biased, or incorrect. It is a
+decision-support tool, not a substitute for human judgment.
+
+You are solely responsible for any decision made or action taken based on its output.
+Use it at your own risk. The authors and contributors accept no liability for any loss
+or damage arising from its use. See the [LICENSE](LICENSE) for the full warranty and
+liability terms.
 
 ## License
 

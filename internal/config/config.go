@@ -27,12 +27,27 @@ type Config struct {
 	LogLevel string `json:"log_level" yaml:"log_level"`
 	// LogFormat is "json" or "text".
 	LogFormat string `json:"log_format" yaml:"log_format"`
-	// Planner selects the reasoning backend: "mock" (default), "anthropic" or "openai".
+	// Planner selects the reasoning backend: "mock" (default), "anthropic",
+	// "openai", "deepseek", or "multi" (a multi-model composition).
 	Planner string `json:"planner" yaml:"planner"`
+	// MultiMode selects the multi-model strategy when Planner=="multi":
+	// "verify", "route" or "ensemble".
+	MultiMode string `json:"multi_mode" yaml:"multi_mode"`
+	// MultiProviders is the ordered provider list for the multi planner, e.g.
+	// ["anthropic","openai"]. Roles depend on MultiMode: verify→[proposer,verifier];
+	// route→[cheap,strong]; ensemble→all members. "mock" is allowed for offline use.
+	MultiProviders []string `json:"multi_providers" yaml:"multi_providers"`
+	// MultiConfidenceThreshold is the router's escalation threshold (top-move confidence).
+	MultiConfidenceThreshold float64 `json:"multi_confidence_threshold" yaml:"multi_confidence_threshold"`
+	// MultiEscalateOnSignal makes the router send re-plans (signals) to the strong model.
+	MultiEscalateOnSignal bool `json:"multi_escalate_on_signal" yaml:"multi_escalate_on_signal"`
 	// LLMModel is the model id for a real LLM planner (e.g. "claude-opus-4-8").
 	LLMModel string `json:"llm_model" yaml:"llm_model"`
 	// LLMMaxTokens bounds the model's output for a real LLM planner.
 	LLMMaxTokens int64 `json:"llm_max_tokens" yaml:"llm_max_tokens"`
+	// LLMBaseURL optionally overrides the API endpoint for OpenAI-compatible
+	// planners (e.g. a gateway or self-hosted endpoint). Empty uses the provider default.
+	LLMBaseURL string `json:"llm_base_url" yaml:"llm_base_url"`
 	// RequestTimeout bounds the time a single HTTP request may take.
 	RequestTimeout time.Duration `json:"request_timeout" yaml:"request_timeout"`
 	// CORSAllowedOrigins lists origins permitted to call the API (the admin UI).
@@ -60,24 +75,31 @@ type Config struct {
 // Default returns the baseline configuration used when nothing else is set.
 func Default() Config {
 	return Config{
-		HTTPAddr:           ":8080",
-		DatabaseURL:        "",
-		DBMaxConns:         10,
-		LogLevel:           "info",
-		LogFormat:          "json",
-		Planner:            "mock",
-		LLMModel:           "claude-opus-4-8",
-		LLMMaxTokens:       4096,
-		RequestTimeout:     15 * time.Second,
-		CORSAllowedOrigins: []string{"http://localhost:3000"},
-		PolicyFile:         "",
-		MarketDataProvider: "offline",
-		MarketDataVendor:   "alphavantage",
-		FinanceHybrid:      false,
-		PlanCacheSize:      1024,
-		PlanCacheTTL:       60 * time.Second,
-		ReplanAsync:        false,
-		ReplanWorkers:      4,
+		HTTPAddr:    ":8080",
+		DatabaseURL: "",
+		DBMaxConns:  10,
+		LogLevel:    "info",
+		LogFormat:   "json",
+		Planner:     "mock",
+		// LLMModel is empty by default so each planner applies its own
+		// provider-appropriate default (Anthropic→claude-opus-4-8,
+		// OpenAI→gpt-4o, DeepSeek→deepseek-chat). Override with DDE_LLM_MODEL.
+		LLMModel:                 "",
+		LLMMaxTokens:             4096,
+		MultiMode:                "verify",
+		MultiProviders:           nil,
+		MultiConfidenceThreshold: 0.6,
+		MultiEscalateOnSignal:    true,
+		RequestTimeout:           15 * time.Second,
+		CORSAllowedOrigins:       []string{"http://localhost:3000"},
+		PolicyFile:               "",
+		MarketDataProvider:       "offline",
+		MarketDataVendor:         "alphavantage",
+		FinanceHybrid:            false,
+		PlanCacheSize:            1024,
+		PlanCacheTTL:             60 * time.Second,
+		ReplanAsync:              false,
+		ReplanWorkers:            4,
 	}
 }
 
@@ -153,6 +175,23 @@ func applyEnv(cfg *Config) {
 			cfg.LLMMaxTokens = n
 		}
 	}
+	if v := os.Getenv("DDE_LLM_BASE_URL"); v != "" {
+		cfg.LLMBaseURL = v
+	}
+	if v := os.Getenv("DDE_MULTI_MODE"); v != "" {
+		cfg.MultiMode = v
+	}
+	if v := os.Getenv("DDE_MULTI_PROVIDERS"); v != "" {
+		cfg.MultiProviders = splitAndTrim(v)
+	}
+	if v := os.Getenv("DDE_MULTI_CONFIDENCE_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.MultiConfidenceThreshold = f
+		}
+	}
+	if v := os.Getenv("DDE_MULTI_ESCALATE_ON_SIGNAL"); v != "" {
+		cfg.MultiEscalateOnSignal = v == "true" || v == "1"
+	}
 	if v := os.Getenv("DDE_REQUEST_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.RequestTimeout = d
@@ -209,7 +248,16 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: invalid log_format %q", c.LogFormat)
 	}
 	switch c.Planner {
-	case "mock", "anthropic", "openai", "finance":
+	case "mock", "anthropic", "openai", "deepseek", "finance":
+	case "multi":
+		switch c.MultiMode {
+		case "verify", "route", "ensemble":
+		default:
+			return fmt.Errorf("config: invalid multi_mode %q (want verify|route|ensemble)", c.MultiMode)
+		}
+		if len(c.MultiProviders) < 2 {
+			return fmt.Errorf("config: planner=multi needs at least 2 providers (DDE_MULTI_PROVIDERS)")
+		}
 	default:
 		return fmt.Errorf("config: invalid planner %q", c.Planner)
 	}

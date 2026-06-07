@@ -26,11 +26,21 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/wire"
 )
 
-// newBaseModelPlanner selects the underlying text model planner named in config.
-// It backs the text-based domains (generic, growth, career) via the planner
-// router; the investing domain uses the numeric finance planner automatically.
-func newBaseModelPlanner(cfg config.Config) llm.Planner {
-	switch cfg.Planner {
+// newPlanner selects the reasoning backend named in config. It is the base
+// (text/LLM) planner the domain router uses for generic/growth/career; the
+// investing domain uses the numeric finance planner automatically. The mock is
+// the default and runs with no external dependencies.
+func newPlanner(cfg config.Config) llm.Planner {
+	if cfg.Planner == "multi" {
+		return newMultiPlanner(cfg)
+	}
+	return buildProvider(cfg.Planner, cfg)
+}
+
+// buildProvider constructs a single-provider planner by name. "mock" is included
+// so multi-model compositions can be exercised offline without API keys.
+func buildProvider(name string, cfg config.Config) llm.Planner {
+	switch name {
 	case "anthropic":
 		return llm.NewAnthropicPlanner(llm.AnthropicConfig{
 			APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
@@ -39,11 +49,44 @@ func newBaseModelPlanner(cfg config.Config) llm.Planner {
 		})
 	case "openai":
 		return llm.NewOpenAIPlanner(llm.OpenAIConfig{
-			APIKey: os.Getenv("OPENAI_API_KEY"),
-			Model:  os.Getenv("OPENAI_MODEL"),
+			Provider:  "openai",
+			APIKey:    os.Getenv("OPENAI_API_KEY"),
+			Model:     cfg.LLMModel,
+			BaseURL:   cfg.LLMBaseURL,
+			MaxTokens: cfg.LLMMaxTokens,
+		})
+	case "deepseek":
+		return llm.NewOpenAIPlanner(llm.OpenAIConfig{
+			Provider:  "deepseek",
+			APIKey:    os.Getenv("DEEPSEEK_API_KEY"),
+			Model:     cfg.LLMModel,
+			BaseURL:   cfg.LLMBaseURL,
+			MaxTokens: cfg.LLMMaxTokens,
 		})
 	default: // "mock", "finance", or anything else -> deterministic mock base
 		return llm.NewMockPlanner()
+	}
+}
+
+// newMultiPlanner composes a multi-model planner from cfg.MultiProviders per the
+// selected mode. Config validation guarantees a valid mode and ≥2 providers.
+func newMultiPlanner(cfg config.Config) llm.Planner {
+	sub := make([]llm.Planner, len(cfg.MultiProviders))
+	for i, name := range cfg.MultiProviders {
+		sub[i] = buildProvider(name, cfg)
+	}
+	switch cfg.MultiMode {
+	case "route":
+		return llm.NewRouterPlanner(sub[0], sub[1], cfg.MultiConfidenceThreshold, cfg.MultiEscalateOnSignal)
+	case "ensemble":
+		return llm.NewEnsemblePlanner(sub...)
+	default: // "verify"
+		verifier, ok := buildProvider(cfg.MultiProviders[1], cfg).(llm.PlanVerifier)
+		if !ok {
+			// The mock planner can't verify; fall back to the proposer alone.
+			return sub[0]
+		}
+		return llm.NewVerifyPlanner(sub[0], verifier)
 	}
 }
 
@@ -61,7 +104,9 @@ func newProvider(cfg config.Config) (marketdata.Provider, error) {
 
 // newEngine assembles the multi-domain engine: a per-domain planner router (with
 // optional plan cache and the finance planner for investing) plus a per-domain
-// evaluator resolver, both built from the pack registry overlaid with policy.
+// evaluator resolver, both built from the pack registry overlaid with policy. The
+// router's base (for non-investing domains) is the configured text planner, which
+// may itself be a multi-model composition.
 func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheObs llm.CacheObserver) (*engine.Engine, error) {
 	provider, err := newProvider(cfg)
 	if err != nil {
@@ -77,7 +122,7 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		}
 	}
 	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
-		Base:         newBaseModelPlanner(cfg),
+		Base:         newPlanner(cfg),
 		Provider:     provider,
 		Cache:        cache,
 		FinanceCache: financeCache,
@@ -343,11 +388,15 @@ func newBacktestCommand() *cobra.Command {
 }
 
 // newMemoryService builds an in-memory, offline service for the CLI commands
-// (evaluate, signal). It reuses the production wiring — registry, planner router
+// (evaluate, signal), reusing the production wiring — registry, planner router
 // (incl. the finance planner on offline fixtures) and per-domain evaluators — with
-// the synchronous inline replan queue so results are immediate.
+// the synchronous inline replan queue. It honours DDE_PLANNER (defaulting to the
+// deterministic mock), so the same commands can drive a real provider with a key.
 func newMemoryService() (*app.Service, error) {
-	cfg := config.Default()
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
 	reg := pack.NewRegistry()
 	pol, err := policy.Load(cfg.PolicyFile)
 	if err != nil {

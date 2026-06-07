@@ -6,6 +6,7 @@ require (
 	github.com/anthropics/anthropic-sdk-go v1.48.0
 	github.com/go-chi/chi/v5 v5.3.0
 	github.com/jackc/pgx/v5 v5.10.0
+	github.com/openai/openai-go/v3 v3.39.0
 	github.com/prometheus/client_golang v1.23.2
 	github.com/spf13/cobra v1.10.2
 	gopkg.in/yaml.v3 v3.0.1

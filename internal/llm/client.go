@@ -49,3 +49,14 @@ type Planner interface {
 	// GeneratePlan produces ranked moves and provenance for the given request.
 	GeneratePlan(ctx context.Context, req PlanRequest) (PlanResult, error)
 }
+
+// PlanVerifier reviews a proposed plan and returns a per-move verdict. It is the
+// capability behind cross-model verification: a different provider critiques the
+// proposer's plan rather than generating its own. Real provider adapters
+// implement both Planner and PlanVerifier.
+type PlanVerifier interface {
+	// VerifierName identifies the verifier in provenance (e.g. "openai").
+	VerifierName() string
+	// VerifyPlan critiques the proposed plan for the given goal.
+	VerifyPlan(ctx context.Context, goal domain.Goal, proposed PlanResult) (Verdict, domain.ModelInvocation, error)
+}
