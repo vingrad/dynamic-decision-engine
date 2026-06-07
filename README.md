@@ -451,6 +451,18 @@ Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper ad
 
 ---
 
+## Disclaimer
+
+This software is provided "as is", without warranty of any kind. The Dynamic Decision
+Engine generates plans, rankings, and recommendations — including output produced by
+large language models — that may be incomplete, biased, or incorrect. It is a
+decision-support tool, not a substitute for human judgment.
+
+You are solely responsible for any decision made or action taken based on its output.
+Use it at your own risk. The authors and contributors accept no liability for any loss
+or damage arising from its use. See the [LICENSE](LICENSE) for the full warranty and
+liability terms.
+
 ## License
 
 GNU Affero General Public License v3.0 (AGPL-3.0) — see [`LICENSE`](LICENSE).
