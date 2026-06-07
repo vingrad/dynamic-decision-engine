@@ -18,6 +18,41 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// TestMemoryQueueSurvivesPanic: a handler panic must not wedge the plan or kill
+// the worker — the plan keeps draining and accepts further work.
+func TestMemoryQueueSurvivesPanic(t *testing.T) {
+	q := NewMemoryQueue(1, 16, discardLogger())
+	var done sync.Map // signalID -> processed
+	q.Start(func(_ context.Context, job ReplanJob) (ReplanOutcome, error) {
+		if job.SignalID == "boom" {
+			panic("handler exploded")
+		}
+		done.Store(job.SignalID, true)
+		return ReplanOutcome{Processed: true}, nil
+	})
+
+	// A panicking signal then a good one, same plan: the good one must still run.
+	for _, sig := range []string{"boom", "ok1"} {
+		if _, err := q.Enqueue(context.Background(), ReplanJob{PlanID: "p1", SignalID: sig}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Give the worker a moment, then enqueue a third for the same plan — proves the
+	// plan was not wedged (queued reset) and the worker is still alive.
+	if _, err := q.Enqueue(context.Background(), ReplanJob{PlanID: "p1", SignalID: "ok2"}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := q.Shutdown(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	for _, sig := range []string{"ok1", "ok2"} {
+		if _, ok := done.Load(sig); !ok {
+			t.Errorf("signal %q was not processed; the panic wedged the plan/worker", sig)
+		}
+	}
+}
+
 // TestMemoryQueueProcessesAllDistinct: every distinct signal for one plan is
 // processed in order — no signal (e.g. a thesis_break) is ever dropped (bug #2).
 func TestMemoryQueueProcessesAllDistinct(t *testing.T) {

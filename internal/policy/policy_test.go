@@ -73,6 +73,10 @@ func TestPolicyValidateRejects(t *testing.T) {
 		"multi one provider":   {Planner: "multi", MultiMode: "ensemble", MultiProviders: []string{"anthropic"}},
 		"multi bad mode":       {Planner: "multi", MultiMode: "nope", MultiProviders: []string{"anthropic", "openai"}},
 		"verify mock verifier": {Planner: "multi", MultiMode: "verify", MultiProviders: []string{"anthropic", "mock"}},
+		// Partial multi spec (no explicit planner: multi) must be rejected, else it
+		// would inherit the global multi and bypass the checks above.
+		"partial multi mode":      {MultiMode: "verify", MultiProviders: []string{"anthropic", "mock"}},
+		"multi fields wrong base": {Planner: "anthropic", MultiMode: "ensemble"},
 	}
 	for name, spec := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -83,12 +87,17 @@ func TestPolicyValidateRejects(t *testing.T) {
 		})
 	}
 
-	// A valid spec passes.
-	ok := Policy{Domains: map[string]DomainPolicy{"x": {Planner: &PlannerSpec{
-		Planner: "multi", MultiMode: "verify", MultiProviders: []string{"anthropic", "openai"},
-	}}}}
-	if err := ok.Validate(); err != nil {
-		t.Errorf("valid spec rejected: %v", err)
+	// Valid specs pass: a full multi spec, and a model-only override (inherits the
+	// global strategy without touching multi fields).
+	for name, spec := range map[string]PlannerSpec{
+		"full multi":  {Planner: "multi", MultiMode: "verify", MultiProviders: []string{"anthropic", "openai"}},
+		"model only":  {Model: "claude-x"},
+		"single back": {Planner: "anthropic"},
+	} {
+		p := Policy{Domains: map[string]DomainPolicy{"x": {Planner: &spec}}}
+		if err := p.Validate(); err != nil {
+			t.Errorf("valid spec %q rejected: %v", name, err)
+		}
 	}
 }
 

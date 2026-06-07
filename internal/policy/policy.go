@@ -104,8 +104,16 @@ func (p Policy) Validate() error {
 }
 
 func (s PlannerSpec) validate() error {
+	// multi_mode/multi_providers are meaningful only for an explicit multi planner.
+	// Rejecting partial specs keeps validation aligned with how plannerFromSpec
+	// overlays fields onto the global config — otherwise a {multi_mode: verify,
+	// multi_providers: [x, mock]} spec with no planner would inherit global "multi",
+	// skip the checks below, and silently drop verification.
+	if (s.MultiMode != "" || len(s.MultiProviders) > 0) && s.Planner != "multi" {
+		return fmt.Errorf("multi_mode/multi_providers require planner: multi")
+	}
 	if s.Planner == "" {
-		return nil // empty spec falls back to the global planner
+		return nil // empty spec falls back to the global planner (optional model override)
 	}
 	if s.Planner != "multi" {
 		if !singleBackends[s.Planner] {
