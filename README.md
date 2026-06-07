@@ -323,6 +323,8 @@ dde version
 
 ## API overview
 
+> 📖 **Full API reference — request/response payloads for every endpoint:** [`docs/api.md`](docs/api.md)
+
 ### Stateless evaluation
 
 ```http
@@ -356,8 +358,6 @@ Stores a signal and triggers replanning if the signal is material.
 ```http
 GET /v1/plans/{id}/versions
 ```
-
-Full endpoint reference: [`docs/api.md`](docs/api.md).
 
 ---
 
