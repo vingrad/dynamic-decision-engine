@@ -158,17 +158,21 @@ That makes the system:
   data stay on your own hardware; nothing leaves the machine, which makes it a
   good fit for a self-hosted home-server deployment (see [Quick start](#quick-start))
 
-Want real AI planning? Bring your own key. A real **Anthropic Claude** planner
-ships behind the same interface — enable it with `DDE_PLANNER=anthropic` and your
-own `ANTHROPIC_API_KEY` (BYOK). It elicits the structured plan via forced tool
-use and records token usage and latency as provenance. Note that enabling it
-sends your inputs to Anthropic's API; the deterministic mock remains the default
-so the system runs fully local, offline, and in CI with no key.
+Want real AI planning? Bring your own key. Real planners ship behind the same
+interface for **Anthropic Claude**, **OpenAI**, and **DeepSeek** — select one with
+`DDE_PLANNER=anthropic|openai|deepseek` (BYOK) and the matching API key
+(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Each elicits the
+structured plan via a forced tool/function call and records token usage and latency
+as provenance. (DeepSeek is served through the OpenAI-compatible adapter.) Note that
+enabling a cloud provider sends your inputs to that provider's API; the
+deterministic mock remains the default so the system runs fully local, offline, and
+in CI with no key.
 
 **Local AI inference is planned.** A self-hosted LLM planner (via an
 OpenAI-compatible endpoint — specific provider to be decided) is on the
 [roadmap](#roadmap), so AI-assisted planning will eventually run entirely on your
-own hardware with no cloud dependency.
+own hardware with no cloud dependency. (The OpenAI-compatible adapter already
+accepts a custom endpoint via `DDE_LLM_BASE_URL`.)
 
 ---
 
@@ -442,8 +446,7 @@ More LLM providers, local / self-hosted inference, authentication, richer scorin
 * [x] Prometheus metrics + Grafana dashboards
 * [x] Minimal admin UI
 * [x] Application/use-case layer with concurrency-safe replanning
-* [x] Anthropic Claude planner adapter (structured output via tool use)
-* [ ] OpenAI planner adapter (interface + placeholder in place)
+* [x] Pluggable LLM planners: Anthropic Claude, OpenAI, and DeepSeek (structured output via tool/function calls)
 * [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Policy constraints
 * [ ] Multi-objective scoring

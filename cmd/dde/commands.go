@@ -33,8 +33,19 @@ func newPlanner(cfg config.Config) llm.Planner {
 		})
 	case "openai":
 		return llm.NewOpenAIPlanner(llm.OpenAIConfig{
-			APIKey: os.Getenv("OPENAI_API_KEY"),
-			Model:  os.Getenv("OPENAI_MODEL"),
+			Provider:  "openai",
+			APIKey:    os.Getenv("OPENAI_API_KEY"),
+			Model:     cfg.LLMModel,
+			BaseURL:   cfg.LLMBaseURL,
+			MaxTokens: cfg.LLMMaxTokens,
+		})
+	case "deepseek":
+		return llm.NewOpenAIPlanner(llm.OpenAIConfig{
+			Provider:  "deepseek",
+			APIKey:    os.Getenv("DEEPSEEK_API_KEY"),
+			Model:     cfg.LLMModel,
+			BaseURL:   cfg.LLMBaseURL,
+			MaxTokens: cfg.LLMMaxTokens,
 		})
 	default:
 		return llm.NewMockPlanner()
@@ -128,7 +139,10 @@ func newEvaluateCommand() *cobra.Command {
 			if err := readJSONFile(input, &in); err != nil {
 				return err
 			}
-			svc := newMemoryService()
+			svc, err := newMemoryService()
+			if err != nil {
+				return err
+			}
 			version, err := svc.Evaluate(cmd.Context(), app.EvaluateInput{
 				Objective:  in.Objective,
 				Metric:     in.Metric,
@@ -181,7 +195,10 @@ func newSignalCommand() *cobra.Command {
 			// Drive the same use-cases the API uses: create the goal, generate
 			// its initial plan, then apply the signal through ApplySignal.
 			ctx := cmd.Context()
-			svc := newMemoryService()
+			svc, err := newMemoryService()
+			if err != nil {
+				return err
+			}
 			goal, err := svc.CreateGoal(ctx, app.CreateGoalInput{
 				Objective: in.Goal.Objective,
 				Metric:    in.Goal.Metric,
@@ -221,10 +238,16 @@ func newSignalCommand() *cobra.Command {
 	return cmd
 }
 
-// newMemoryService builds an in-memory, mock-planner service for the offline CLI
-// commands (evaluate, signal). It deliberately reuses the production use-cases.
-func newMemoryService() *app.Service {
-	return app.New(storage.NewMemory(), engine.New(llm.NewMockPlanner()))
+// newMemoryService builds an in-memory service for the offline CLI commands
+// (evaluate, signal), reusing the production use-cases. The planner honours
+// DDE_PLANNER (defaulting to the deterministic mock), so the same commands can
+// drive a real provider when a key is configured.
+func newMemoryService() (*app.Service, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, err
+	}
+	return app.New(storage.NewMemory(), engine.New(newPlanner(cfg))), nil
 }
 
 // newVersionCommand prints build information.

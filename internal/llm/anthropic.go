@@ -62,36 +62,6 @@ func NewAnthropicPlanner(cfg AnthropicConfig) *AnthropicPlanner {
 // Name implements Planner.
 func (*AnthropicPlanner) Name() string { return "anthropic" }
 
-// planToolName is the single tool the model is forced to call.
-const planToolName = "submit_plan"
-
-// planDTO mirrors the submit_plan tool schema; it is the wire shape returned by
-// the model before mapping into domain types.
-type planDTO struct {
-	Summary          string    `json:"summary"`
-	ReasoningSummary string    `json:"reasoning_summary"`
-	RankedMoves      []moveDTO `json:"ranked_moves"`
-}
-
-type moveDTO struct {
-	Title          string        `json:"title"`
-	Description    string        `json:"description"`
-	Confidence     float64       `json:"confidence"`
-	ExpectedImpact string        `json:"expected_impact"`
-	Effort         string        `json:"effort"`
-	Risk           string        `json:"risk"`
-	Rationale      string        `json:"rationale"`
-	Experiment     experimentDTO `json:"experiment"`
-	FallbackMoves  []string      `json:"fallback_moves"`
-}
-
-type experimentDTO struct {
-	Title          string   `json:"title"`
-	DurationDays   int      `json:"duration_days"`
-	SuccessSignals []string `json:"success_signals"`
-	KillCriteria   []string `json:"kill_criteria"`
-}
-
 // GeneratePlan implements Planner by calling Claude with a forced tool call.
 func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (PlanResult, error) {
 	g := req.Goal
@@ -99,31 +69,23 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 		return PlanResult{}, fmt.Errorf("llm: goal objective is required")
 	}
 
-	userPayload, err := json.MarshalIndent(struct {
-		Objective  string         `json:"objective"`
-		Metric     string         `json:"metric,omitempty"`
-		Target     string         `json:"target,omitempty"`
-		Context    domain.Context `json:"context"`
-		SignalNote string         `json:"new_signal,omitempty"`
-	}{g.Objective, g.Metric, g.Target, g.Context, req.SignalNote}, "", "  ")
+	userPayload, err := planUserPayload(g, req.SignalNote)
 	if err != nil {
-		return PlanResult{}, fmt.Errorf("llm: marshal request: %w", err)
+		return PlanResult{}, err
 	}
 
 	start := time.Now()
 	msg, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
 		Model:     p.model,
 		MaxTokens: p.maxTokens,
-		System: []anthropic.TextBlockParam{{
-			Text: systemPrompt,
-		}},
+		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
 		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(string(userPayload))),
+			anthropic.NewUserMessage(anthropic.NewTextBlock(userPayload)),
 		},
 		Tools: []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{
 			Name:        planToolName,
 			Description: anthropic.String("Submit the ranked action plan for the given goal."),
-			InputSchema: planInputSchema(),
+			InputSchema: anthropicInputSchema(),
 		}}},
 		// Force the model to answer by calling submit_plan, guaranteeing structured output.
 		ToolChoice: anthropic.ToolChoiceUnionParam{
@@ -135,7 +97,7 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 	}
 	latency := time.Since(start)
 
-	dto, err := extractPlan(msg)
+	dto, err := extractAnthropicPlan(msg)
 	if err != nil {
 		return PlanResult{}, err
 	}
@@ -143,42 +105,20 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 		return PlanResult{}, fmt.Errorf("llm: model returned no ranked moves")
 	}
 
-	moves := make([]domain.RankedMove, len(dto.RankedMoves))
-	for i, m := range dto.RankedMoves {
-		moves[i] = domain.RankedMove{
-			Rank:           i + 1, // re-number to guarantee a clean 1..N ranking
-			Title:          m.Title,
-			Description:    m.Description,
-			Confidence:     clampConfidence(m.Confidence),
-			ExpectedImpact: level(m.ExpectedImpact),
-			Effort:         level(m.Effort),
-			Risk:           level(m.Risk),
-			Rationale:      m.Rationale,
-			Experiment: domain.Experiment{
-				Title:          m.Experiment.Title,
-				DurationDays:   m.Experiment.DurationDays,
-				SuccessSignals: m.Experiment.SuccessSignals,
-				KillCriteria:   m.Experiment.KillCriteria,
-			},
-			FallbackMoves: m.FallbackMoves,
-		}
-	}
-
-	modelName := p.model
 	prov := domain.DecisionProvenance{
 		ReasoningSummary: dto.ReasoningSummary,
 		InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
 		Planner:          "anthropic",
 		PromptVersion:    anthropicPromptVersion,
-		Model:            modelName,
+		Model:            p.model,
 	}
 
 	return PlanResult{
 		Summary:     dto.Summary,
-		RankedMoves: moves,
+		RankedMoves: mapMoves(dto),
 		Provenance:  prov,
 		Invocation: domain.ModelInvocation{
-			Model:            modelName,
+			Model:            p.model,
 			PromptVersion:    anthropicPromptVersion,
 			PromptTokens:     int(msg.Usage.InputTokens),
 			CompletionTokens: int(msg.Usage.OutputTokens),
@@ -188,8 +128,8 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 	}, nil
 }
 
-// extractPlan finds the forced tool-use block and decodes its input.
-func extractPlan(msg *anthropic.Message) (planDTO, error) {
+// extractAnthropicPlan finds the forced tool-use block and decodes its input.
+func extractAnthropicPlan(msg *anthropic.Message) (planDTO, error) {
 	for _, block := range msg.Content {
 		if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok && tu.Name == planToolName {
 			var dto planDTO
@@ -202,79 +142,8 @@ func extractPlan(msg *anthropic.Message) (planDTO, error) {
 	return planDTO{}, fmt.Errorf("llm: model did not call %s", planToolName)
 }
 
-// level coerces a model-provided string into a valid Level, defaulting to medium.
-func level(s string) domain.Level {
-	l := domain.Level(s)
-	if l.Valid() {
-		return l
-	}
-	return domain.LevelMedium
-}
-
-// clampConfidence keeps confidence within [0, 1].
-func clampConfidence(c float64) float64 {
-	switch {
-	case c < 0:
-		return 0
-	case c > 1:
-		return 1
-	default:
-		return c
-	}
-}
-
-const systemPrompt = `You are the reasoning core of a decision-planning engine.
-
-Given a goal with its context, assets and constraints, produce a small set of
-ranked action paths (moves) that move toward the goal. This is decision support,
-not a promise of the single best answer.
-
-For each move provide: a clear title and description; an honest confidence in
-[0,1]; expected_impact, effort and risk each as exactly one of "low", "medium" or
-"high"; a concise rationale; a first experiment with a duration in days, concrete
-success signals and kill/pivot criteria; and one or more fallback moves.
-
-Rank moves from strongest to weakest (the first is the top recommendation).
-Prefer moves that exploit existing assets and de-risk binding constraints. Be
-calibrated: do not inflate confidence. Return your answer by calling the
-submit_plan tool — do not write prose outside the tool call.`
-
-// planInputSchema returns the JSON schema for the submit_plan tool.
-func planInputSchema() anthropic.ToolInputSchemaParam {
-	levelEnum := map[string]any{"type": "string", "enum": []string{"low", "medium", "high"}}
-	strArray := map[string]any{"type": "array", "items": map[string]any{"type": "string"}}
-	return anthropic.ToolInputSchemaParam{
-		Properties: map[string]any{
-			"summary":           map[string]any{"type": "string"},
-			"reasoning_summary": map[string]any{"type": "string"},
-			"ranked_moves": map[string]any{
-				"type": "array",
-				"items": map[string]any{
-					"type": "object",
-					"properties": map[string]any{
-						"title":           map[string]any{"type": "string"},
-						"description":     map[string]any{"type": "string"},
-						"confidence":      map[string]any{"type": "number"},
-						"expected_impact": levelEnum,
-						"effort":          levelEnum,
-						"risk":            levelEnum,
-						"rationale":       map[string]any{"type": "string"},
-						"experiment": map[string]any{
-							"type": "object",
-							"properties": map[string]any{
-								"title":           map[string]any{"type": "string"},
-								"duration_days":   map[string]any{"type": "integer"},
-								"success_signals": strArray,
-								"kill_criteria":   strArray,
-							},
-							"required": []string{"title", "duration_days", "success_signals", "kill_criteria"},
-						},
-						"fallback_moves": strArray,
-					},
-					"required": []string{"title", "description", "confidence", "expected_impact", "effort", "risk", "rationale", "experiment"},
-				},
-			},
-		},
-		Required: []string{"summary", "reasoning_summary", "ranked_moves"},
-	}
+// anthropicInputSchema adapts the shared plan schema into the Anthropic tool type.
+func anthropicInputSchema() anthropic.ToolInputSchemaParam {
+	properties, required := planSchema()
+	return anthropic.ToolInputSchemaParam{Properties: properties, Required: required}
 }
