@@ -1,0 +1,38 @@
+# Extra decision domains loaded at startup via DDE_DOMAINS=examples/domains.yaml.
+# Each entry is a pack descriptor as pure data — no code, no recompile. These are
+# text/prompt domains: the prompt_template is appended to the base planner prompt,
+# and validation rules are declarative shape checks.
+domains:
+  - id: fitness
+    name: Fitness
+    # version and prompt_version default to "1" and "<id>-v1" when omitted.
+    prompt_template: |
+      DOMAIN: FITNESS
+      Treat each move as a training experiment aimed at one measurable adaptation
+      (strength, endurance, mobility, body composition). For every move:
+      - Name the adaptation it targets and the single metric that tracks it.
+      - Prefer progressive, recoverable bets; respect sleep, time and injury risk.
+      - Make kill_criteria the absence of measurable progress within the window.
+      Be honest about recovery cost and adherence; a plan nobody sustains fails.
+    eval:
+      # Materiality threshold: a new signal must move top-move confidence by this
+      # much to cut a new plan version.
+      confidence_delta: 0.15
+    vocab:
+      asset_kinds: [time, equipment, coaching, baseline_fitness]
+      constraint_kinds: [injury, schedule, recovery, budget]
+      signal_kinds: [progress_check, injury, plateau, life_event]
+    validation:
+      # Off by default; set true to warn on asset/constraint kinds outside the vocab.
+      warn_unknown_kinds: false
+      rules:
+        - check: require_metric
+          field: metric
+          message: "no fitness metric set; training experiments cannot be scored"
+          severity: warning
+        - check: require_any_kind
+          kinds: [schedule, recovery]
+          scopes: [constraint]
+          field: context.constraints
+          message: "no schedule or recovery constraint; plans may be unsustainable"
+          severity: warning

@@ -8,8 +8,9 @@
 // and per-domain evaluators (an engine.EvaluatorResolver), so adding a new domain
 // is a single descriptor plus one registration — no edits across the codebase.
 //
-// Import rule: pack imports only `domain`. It must never import `llm`, `engine`,
-// or a specific domain's implementation (e.g. `finance`) — domain-specific config
+// Import rule: pack may use `domain`, stdlib serialization and YAML (for the
+// optional config loader in load.go), and `finance` for built-in scoring defaults.
+// It must never import `llm`, `engine`, or `wire` — domain-specific behaviour
 // rides on the opaque Scoring field and is interpreted by the wiring layer.
 package pack
 
@@ -30,20 +31,20 @@ const DefaultDomain = "generic"
 // Vocabulary lists suggested (non-binding) terminology a domain surfaces to
 // callers and docs: the asset, constraint and signal kinds that make sense in it.
 type Vocabulary struct {
-	AssetKinds      []string `json:"asset_kinds"`
-	ConstraintKinds []string `json:"constraint_kinds"`
-	SignalKinds     []string `json:"signal_kinds"`
+	AssetKinds      []string `json:"asset_kinds" yaml:"asset_kinds"`
+	ConstraintKinds []string `json:"constraint_kinds" yaml:"constraint_kinds"`
+	SignalKinds     []string `json:"signal_kinds" yaml:"signal_kinds"`
 }
 
 // EvaluatorConfig is the data form of a materiality policy. The wiring layer turns
 // it into an engine.Evaluator (engine.ThresholdEvaluator{ConfidenceDelta}).
 type EvaluatorConfig struct {
-	ConfidenceDelta float64 `json:"confidence_delta"`
+	ConfidenceDelta float64 `json:"confidence_delta" yaml:"confidence_delta"`
 
 	// IgnoreSignalKinds lists signal kinds the domain never replans on. A signal of
 	// one of these kinds is short-circuited by the engine's replan gate before any
 	// (expensive) plan regeneration. Empty means every kind triggers a replan.
-	IgnoreSignalKinds []string `json:"ignore_signal_kinds,omitempty"`
+	IgnoreSignalKinds []string `json:"ignore_signal_kinds,omitempty" yaml:"ignore_signal_kinds,omitempty"`
 }
 
 // Severity classifies a validation finding.
@@ -56,41 +57,43 @@ const (
 
 // ValidationIssue is a single finding from validating a goal against a domain.
 type ValidationIssue struct {
-	Field    string   `json:"field"`
-	Message  string   `json:"message"`
-	Severity Severity `json:"severity"`
+	Field    string   `json:"field" yaml:"field"`
+	Message  string   `json:"message" yaml:"message"`
+	Severity Severity `json:"severity" yaml:"severity"`
 }
 
 // Descriptor is the complete data description of a domain. It carries a small
 // validate function (pure, no external deps) rather than a behaviour interface so
 // the package stays free of engine/LLM dependencies.
 type Descriptor struct {
-	ID            string // stable key, e.g. "investing"
-	Name          string // human-readable, e.g. "Investing"
-	Version       string // bump when prompt/policy changes; recorded in provenance
-	PromptVersion string // identifies the prompt contract for provenance
+	ID            string `json:"id" yaml:"id"`                         // stable key, e.g. "investing"
+	Name          string `json:"name" yaml:"name"`                     // human-readable, e.g. "Investing"
+	Version       string `json:"version" yaml:"version"`               // bump when prompt/policy changes; recorded in provenance
+	PromptVersion string `json:"prompt_version" yaml:"prompt_version"` // identifies the prompt contract for provenance
 
 	// PromptTemplate is appended to the base system prompt by the guided planner.
 	// The generic domain uses "" so its prompt is byte-for-byte the original.
-	PromptTemplate string
+	PromptTemplate string `json:"prompt_template" yaml:"prompt_template"`
 
 	// PlannerKind selects how the domain reasons. The empty value means the
 	// guided text planner (base prompt + PromptTemplate). A named kind (e.g.
 	// "finance") selects a numeric planner registered in the wiring layer. Kept a
 	// free string so this package never enumerates planner implementations.
-	PlannerKind string
+	PlannerKind string `json:"planner_kind,omitempty" yaml:"planner_kind,omitempty"`
 
-	Eval EvaluatorConfig
+	Eval EvaluatorConfig `json:"eval" yaml:"eval"`
 	// Scoring carries opaque, domain-specific scoring config consumed by the
 	// planner builder for this domain's PlannerKind (e.g. *finance.ScoringConfig
-	// for "finance"). nil for domains without numeric scoring.
-	Scoring any
-	Vocab   Vocabulary
+	// for "finance"). nil for domains without numeric scoring. It is not loadable
+	// from config (a map cannot become a typed scoring struct); numeric tuning is
+	// done per-domain via the policy file instead.
+	Scoring any        `json:"-" yaml:"-"`
+	Vocab   Vocabulary `json:"vocab" yaml:"vocab"`
 
 	// Validation is the declarative validation policy for the domain: a set of
 	// shape rules plus an optional vocabulary check. It is pure data so a domain
 	// (including one loaded from config) needs no code. Evaluate it via Validate.
-	Validation Validation
+	Validation Validation `json:"validation" yaml:"validation"`
 }
 
 // KindScope names where a kind-based rule looks for a kind.
@@ -115,20 +118,20 @@ const (
 // validate functions. When its predicate is unsatisfied it yields a ValidationIssue
 // carrying Field/Message/Severity.
 type ValidationRule struct {
-	Check    ValidationCheck `json:"check"`
-	Kinds    []string        `json:"kinds,omitempty"`  // for require_any_kind
-	Scopes   []KindScope     `json:"scopes,omitempty"` // for require_any_kind; empty = both
-	Field    string          `json:"field"`
-	Message  string          `json:"message"`
-	Severity Severity        `json:"severity"`
+	Check    ValidationCheck `json:"check" yaml:"check"`
+	Kinds    []string        `json:"kinds,omitempty" yaml:"kinds,omitempty"`   // for require_any_kind
+	Scopes   []KindScope     `json:"scopes,omitempty" yaml:"scopes,omitempty"` // for require_any_kind; empty = both
+	Field    string          `json:"field" yaml:"field"`
+	Message  string          `json:"message" yaml:"message"`
+	Severity Severity        `json:"severity" yaml:"severity"`
 }
 
 // Validation is a domain's declarative validation policy.
 type Validation struct {
-	Rules []ValidationRule `json:"rules,omitempty"`
+	Rules []ValidationRule `json:"rules,omitempty" yaml:"rules,omitempty"`
 	// WarnUnknownKinds, when true, warns for any asset/constraint whose Kind is not
 	// in the domain's Vocab. Off by default: Vocab is suggested, not binding.
-	WarnUnknownKinds bool `json:"warn_unknown_kinds,omitempty"`
+	WarnUnknownKinds bool `json:"warn_unknown_kinds,omitempty" yaml:"warn_unknown_kinds,omitempty"`
 }
 
 // Validate returns the soft/hard findings for a goal under this domain's policy.

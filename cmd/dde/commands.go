@@ -112,6 +112,16 @@ func marketDataSources(provider marketdata.Provider) map[string]wire.DataSource 
 	return map[string]wire.DataSource{"marketdata": provider}
 }
 
+// buildRegistry assembles the domain pack registry: the built-in packs plus any
+// config-defined domains loaded from cfg.DomainsPath (DDE_DOMAINS).
+func buildRegistry(cfg config.Config) (*pack.Registry, error) {
+	extra, err := pack.LoadDescriptors(cfg.DomainsPath)
+	if err != nil {
+		return nil, err
+	}
+	return pack.NewRegistryFrom(extra...), nil
+}
+
 // newEngine assembles the multi-domain engine: a per-domain planner router (with
 // optional plan cache and the finance planner for investing) plus a per-domain
 // evaluator resolver, both built from the pack registry overlaid with policy. The
@@ -169,7 +179,10 @@ func newServeCommand() *cobra.Command {
 			}
 			defer repo.Close()
 
-			reg := pack.NewRegistry()
+			reg, err := buildRegistry(cfg)
+			if err != nil {
+				return err
+			}
 			pol, err := policy.Load(cfg.PolicyFile)
 			if err != nil {
 				return err
@@ -395,11 +408,19 @@ func newBacktestCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			pol, err := policy.Load(config.Default().PolicyFile)
+			cfg, err := config.Load()
 			if err != nil {
 				return err
 			}
-			h := backtest.New(pack.NewRegistry(), pol, provider)
+			pol, err := policy.Load(cfg.PolicyFile)
+			if err != nil {
+				return err
+			}
+			reg, err := buildRegistry(cfg)
+			if err != nil {
+				return err
+			}
+			h := backtest.New(reg, pol, provider)
 			rep, err := h.Run(cmd.Context(), sc)
 			if err != nil {
 				return err
@@ -427,7 +448,10 @@ func newMemoryService() (*app.Service, error) {
 	if err != nil {
 		return nil, err
 	}
-	reg := pack.NewRegistry()
+	reg, err := buildRegistry(cfg)
+	if err != nil {
+		return nil, err
+	}
 	pol, err := policy.Load(cfg.PolicyFile)
 	if err != nil {
 		return nil, err

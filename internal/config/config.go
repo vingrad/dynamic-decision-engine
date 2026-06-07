@@ -54,6 +54,9 @@ type Config struct {
 	CORSAllowedOrigins []string `json:"cors_allowed_origins" yaml:"cors_allowed_origins"`
 	// PolicyFile is an optional path to per-domain tunables (DDE_POLICY).
 	PolicyFile string `json:"policy_file" yaml:"policy_file"`
+	// DomainsPath is an optional path to a JSON/YAML file defining extra decision
+	// domains beyond the built-ins (DDE_DOMAINS). Empty means built-ins only.
+	DomainsPath string `json:"domains_file" yaml:"domains_file"`
 	// MarketDataProvider selects the market-data backend for the finance planner:
 	// "offline" (default, embedded fixtures, no network) or "http" (stub).
 	MarketDataProvider string `json:"market_data_provider" yaml:"market_data_provider"`
@@ -210,6 +213,9 @@ func applyEnv(cfg *Config) {
 	}
 	if v := os.Getenv("DDE_POLICY"); v != "" {
 		cfg.PolicyFile = v
+	}
+	if v := os.Getenv("DDE_DOMAINS"); v != "" {
+		cfg.DomainsPath = v
 	}
 	if v := os.Getenv("DDE_MARKETDATA_PROVIDER"); v != "" {
 		cfg.MarketDataProvider = v
