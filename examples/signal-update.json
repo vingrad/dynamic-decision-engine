@@ -1,0 +1,22 @@
+{
+  "goal": {
+    "objective": "Grow the product to 1,000 paying customers within two quarters",
+    "metric": "paying customers",
+    "target": "1000",
+    "context": {
+      "situation": "Early-stage B2B SaaS with 120 paying customers, mostly inbound. Small team, limited runway.",
+      "assets": [
+        { "name": "founder network in target vertical", "kind": "network" },
+        { "name": "high net revenue retention", "kind": "product" }
+      ],
+      "constraints": [
+        { "name": "limited engineering capacity", "kind": "time" },
+        { "name": "12 months runway", "kind": "budget" }
+      ]
+    }
+  },
+  "signal": {
+    "kind": "competitive_shift",
+    "description": "A well-funded competitor just launched a free tier targeting the same vertical, slowing inbound signups."
+  }
+}

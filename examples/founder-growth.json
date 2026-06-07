@@ -1,0 +1,22 @@
+{
+  "objective": "Grow the product to 1,000 paying customers within two quarters",
+  "metric": "paying customers",
+  "target": "1000",
+  "context": {
+    "situation": "Early-stage B2B SaaS with 120 paying customers, mostly inbound. Small team, limited runway.",
+    "facts": [
+      "Current monthly growth rate is ~8%",
+      "Net revenue retention is healthy at 110%",
+      "Founder has a strong network in the target vertical"
+    ],
+    "assets": [
+      { "name": "founder network in target vertical", "kind": "network", "description": "Warm relationships with ~50 prospective buyers" },
+      { "name": "high net revenue retention", "kind": "product", "description": "Existing customers expand usage over time" },
+      { "name": "usage analytics dataset", "kind": "data", "description": "Detailed product telemetry to find expansion signals" }
+    ],
+    "constraints": [
+      { "name": "limited engineering capacity", "kind": "time", "description": "Two engineers; cannot pursue many bets at once" },
+      { "name": "12 months runway", "kind": "budget", "description": "Spend must stay capital-efficient" }
+    ]
+  }
+}

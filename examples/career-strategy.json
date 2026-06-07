@@ -1,0 +1,21 @@
+{
+  "objective": "Transition into a Principal / Staff-level platform architecture role within 12 months",
+  "metric": "qualified offers at target level",
+  "target": "2",
+  "context": {
+    "situation": "Senior engineer with 8 years experience, currently delivering but not visible at the architecture level.",
+    "facts": [
+      "Strong delivery track record but limited public profile",
+      "Comfortable with backend and infrastructure, less so with system design interviews",
+      "Has bandwidth for ~6 focused hours per week on career moves"
+    ],
+    "assets": [
+      { "name": "deep backend and infrastructure experience", "kind": "skill", "description": "Years of production systems work" },
+      { "name": "internal reputation for reliable delivery", "kind": "network", "description": "Trusted by current leadership" }
+    ],
+    "constraints": [
+      { "name": "limited weekly time budget", "kind": "time", "description": "Roughly 6 hours per week available" },
+      { "name": "geographic preference", "kind": "geography", "description": "Remote or within current metro only" }
+    ]
+  }
+}

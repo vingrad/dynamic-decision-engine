@@ -1,0 +1,13 @@
+CLAUDE.md
+.claude/
+
+# Go build artifacts
+/bin/
+/dist/
+coverage.out
+
+# Environment
+.env
+
+# OS / editor
+.DS_Store

@@ -1,0 +1,35 @@
+# golangci-lint configuration. Run with `make lint` (requires golangci-lint).
+run:
+  timeout: 5m
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - staticcheck
+    - unused
+    - gofmt
+    - goimports
+    - revive
+    - misspell
+    - unconvert
+    - bodyclose
+
+issues:
+  exclude-rules:
+    # Test files may ignore some errors for brevity.
+    - path: _test\.go
+      linters:
+        - errcheck
+  max-issues-per-linter: 0
+  max-same-issues: 0
+
+linters-settings:
+  goimports:
+    local-prefixes: github.com/vingrad/dynamic-decision-engine
+  revive:
+    rules:
+      - name: exported
+        disabled: false
