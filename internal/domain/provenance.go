@@ -10,6 +10,26 @@ type DecisionProvenance struct {
 	Planner          string `json:"planner"`
 	PromptVersion    string `json:"prompt_version"`
 	Model            string `json:"model"`
+
+	// Strategy is the planning strategy: "single" for one model, or "verify",
+	// "route", "ensemble" for multi-model compositions. Empty is treated as single.
+	Strategy string `json:"strategy,omitempty"`
+	// Contributors records every model that participated and its role, so a
+	// multi-model decision is auditable end to end.
+	Contributors []ModelContribution `json:"contributors,omitempty"`
+	// Notes carries human-readable detail from a composite strategy — verifier
+	// flags, agreement summary, or an escalation reason.
+	Notes string `json:"notes,omitempty"`
+}
+
+// ModelContribution records one model's participation in a (possibly multi-model)
+// decision: which planner/model, in what role, and how many tokens it used.
+type ModelContribution struct {
+	Planner          string `json:"planner"`
+	Model            string `json:"model"`
+	Role             string `json:"role"` // proposer | verifier | ensemble-member | router-selected
+	PromptTokens     int    `json:"prompt_tokens,omitempty"`
+	CompletionTokens int    `json:"completion_tokens,omitempty"`
 }
 
 // ModelInvocation captures metadata about a single call to a reasoning model.

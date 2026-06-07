@@ -174,6 +174,24 @@ OpenAI-compatible endpoint — specific provider to be decided) is on the
 own hardware with no cloud dependency. (The OpenAI-compatible adapter already
 accepts a custom endpoint via `DDE_LLM_BASE_URL`.)
 
+**Multi-model planning** (`DDE_PLANNER=multi`) composes models by *role*, each
+recorded in provenance for auditability:
+
+* **verify** — one provider proposes, a *different* provider critiques (drops weak
+  moves, re-calibrates confidence). Best for calibration + auditability.
+* **route** — a cheap model handles the common case; escalates to a stronger model
+  on low confidence or when a material signal arrives. A cost lever.
+* **ensemble** — several providers run in parallel; agreement on the top move
+  scales its confidence (divergence lowers it). An uncertainty signal.
+
+```bash
+# verify: Claude proposes, GPT reviews
+DDE_PLANNER=multi DDE_MULTI_MODE=verify DDE_MULTI_PROVIDERS=anthropic,openai dde serve
+# keyless offline demo (ensemble of two mock planners)
+DDE_PLANNER=multi DDE_MULTI_MODE=ensemble DDE_MULTI_PROVIDERS=mock,mock \
+  dde evaluate --input examples/founder-growth.json
+```
+
 ---
 
 ### 4. Built as infrastructure
@@ -447,6 +465,7 @@ More LLM providers, local / self-hosted inference, authentication, richer scorin
 * [x] Minimal admin UI
 * [x] Application/use-case layer with concurrency-safe replanning
 * [x] Pluggable LLM planners: Anthropic Claude, OpenAI, and DeepSeek (structured output via tool/function calls)
+* [x] Multi-model strategies: cross-model verify, cost routing, agreement ensemble (provenance-tracked)
 * [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Policy constraints
 * [ ] Multi-objective scoring

@@ -62,6 +62,9 @@ func NewAnthropicPlanner(cfg AnthropicConfig) *AnthropicPlanner {
 // Name implements Planner.
 func (*AnthropicPlanner) Name() string { return "anthropic" }
 
+// VerifierName implements PlanVerifier.
+func (*AnthropicPlanner) VerifierName() string { return "anthropic" }
+
 // GeneratePlan implements Planner by calling Claude with a forced tool call.
 func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (PlanResult, error) {
 	g := req.Goal
@@ -73,77 +76,88 @@ func (p *AnthropicPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (P
 	if err != nil {
 		return PlanResult{}, err
 	}
-
-	start := time.Now()
-	msg, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
-		Model:     p.model,
-		MaxTokens: p.maxTokens,
-		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
-		Messages: []anthropic.MessageParam{
-			anthropic.NewUserMessage(anthropic.NewTextBlock(userPayload)),
-		},
-		Tools: []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{
-			Name:        planToolName,
-			Description: anthropic.String("Submit the ranked action plan for the given goal."),
-			InputSchema: anthropicInputSchema(),
-		}}},
-		// Force the model to answer by calling submit_plan, guaranteeing structured output.
-		ToolChoice: anthropic.ToolChoiceUnionParam{
-			OfTool: &anthropic.ToolChoiceToolParam{Name: planToolName},
-		},
-	})
-	if err != nil {
-		return PlanResult{}, fmt.Errorf("llm: anthropic request: %w", err)
-	}
-	latency := time.Since(start)
-
-	dto, err := extractAnthropicPlan(msg)
+	properties, required := planSchema()
+	raw, inv, err := p.callStructured(ctx, systemPrompt, userPayload, planToolName, properties, required)
 	if err != nil {
 		return PlanResult{}, err
+	}
+
+	var dto planDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return PlanResult{}, fmt.Errorf("llm: decode tool input: %w", err)
 	}
 	if len(dto.RankedMoves) == 0 {
 		return PlanResult{}, fmt.Errorf("llm: model returned no ranked moves")
 	}
 
-	prov := domain.DecisionProvenance{
-		ReasoningSummary: dto.ReasoningSummary,
-		InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
-		Planner:          "anthropic",
-		PromptVersion:    anthropicPromptVersion,
-		Model:            p.model,
-	}
-
 	return PlanResult{
 		Summary:     dto.Summary,
 		RankedMoves: mapMoves(dto),
-		Provenance:  prov,
-		Invocation: domain.ModelInvocation{
-			Model:            p.model,
+		Provenance: domain.DecisionProvenance{
+			ReasoningSummary: dto.ReasoningSummary,
+			InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
+			Planner:          "anthropic",
 			PromptVersion:    anthropicPromptVersion,
-			PromptTokens:     int(msg.Usage.InputTokens),
-			CompletionTokens: int(msg.Usage.OutputTokens),
-			TotalTokens:      int(msg.Usage.InputTokens + msg.Usage.OutputTokens),
-			LatencyMS:        latency.Milliseconds(),
+			Model:            p.model,
+			Strategy:         "single",
 		},
+		Invocation: inv,
 	}, nil
 }
 
-// extractAnthropicPlan finds the forced tool-use block and decodes its input.
-func extractAnthropicPlan(msg *anthropic.Message) (planDTO, error) {
-	for _, block := range msg.Content {
-		if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok && tu.Name == planToolName {
-			var dto planDTO
-			if err := json.Unmarshal([]byte(tu.Input), &dto); err != nil {
-				return planDTO{}, fmt.Errorf("llm: decode tool input: %w", err)
-			}
-			return dto, nil
-		}
+// VerifyPlan implements PlanVerifier by asking Claude to review a proposed plan.
+func (p *AnthropicPlanner) VerifyPlan(ctx context.Context, goal domain.Goal, proposed PlanResult) (Verdict, domain.ModelInvocation, error) {
+	userPayload, err := verifyUserPayload(goal, proposed)
+	if err != nil {
+		return Verdict{}, domain.ModelInvocation{}, err
 	}
-	return planDTO{}, fmt.Errorf("llm: model did not call %s", planToolName)
+	properties, required := verifySchema()
+	raw, inv, err := p.callStructured(ctx, verifySystemPrompt, userPayload, verifyToolName, properties, required)
+	if err != nil {
+		return Verdict{}, domain.ModelInvocation{}, err
+	}
+	var v Verdict
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return Verdict{}, domain.ModelInvocation{}, fmt.Errorf("llm: decode verdict: %w", err)
+	}
+	return v, inv, nil
 }
 
-// anthropicInputSchema adapts the shared plan schema into the Anthropic tool type.
-func anthropicInputSchema() anthropic.ToolInputSchemaParam {
-	properties, required := planSchema()
-	return anthropic.ToolInputSchemaParam{Properties: properties, Required: required}
+// callStructured runs a forced-tool call and returns the raw tool input JSON plus
+// invocation metadata. It is the shared primitive behind GeneratePlan and VerifyPlan.
+func (p *AnthropicPlanner) callStructured(ctx context.Context, system, userJSON, toolName string, properties map[string]any, required []string) ([]byte, domain.ModelInvocation, error) {
+	start := time.Now()
+	msg, err := p.client.Messages.New(ctx, anthropic.MessageNewParams{
+		Model:     p.model,
+		MaxTokens: p.maxTokens,
+		System:    []anthropic.TextBlockParam{{Text: system}},
+		Messages: []anthropic.MessageParam{
+			anthropic.NewUserMessage(anthropic.NewTextBlock(userJSON)),
+		},
+		Tools: []anthropic.ToolUnionParam{{OfTool: &anthropic.ToolParam{
+			Name:        toolName,
+			Description: anthropic.String("Return the structured result by calling this tool."),
+			InputSchema: anthropic.ToolInputSchemaParam{Properties: properties, Required: required},
+		}}},
+		ToolChoice: anthropic.ToolChoiceUnionParam{
+			OfTool: &anthropic.ToolChoiceToolParam{Name: toolName},
+		},
+	})
+	if err != nil {
+		return nil, domain.ModelInvocation{}, fmt.Errorf("llm: anthropic request: %w", err)
+	}
+	inv := domain.ModelInvocation{
+		Model:            p.model,
+		PromptVersion:    anthropicPromptVersion,
+		PromptTokens:     int(msg.Usage.InputTokens),
+		CompletionTokens: int(msg.Usage.OutputTokens),
+		TotalTokens:      int(msg.Usage.InputTokens + msg.Usage.OutputTokens),
+		LatencyMS:        time.Since(start).Milliseconds(),
+	}
+	for _, block := range msg.Content {
+		if tu, ok := block.AsAny().(anthropic.ToolUseBlock); ok && tu.Name == toolName {
+			return []byte(tu.Input), inv, nil
+		}
+	}
+	return nil, inv, fmt.Errorf("llm: model did not call %s", toolName)
 }
