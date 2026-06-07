@@ -295,6 +295,37 @@ func (r *PostgresRepository) ListSignals(ctx context.Context, goalID string, pag
 	return out, rows.Err()
 }
 
+func (r *PostgresRepository) ListPendingSignals(ctx context.Context, limit int) ([]domain.Signal, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	rows, err := r.pool.Query(ctx, `
+		SELECT id, goal_id, kind, description, payload, created_at,
+		       status, COALESCE(reason, ''), COALESCE(result_version, 0), COALESCE(error, ''), processed_at
+		FROM signal WHERE status = 'pending' ORDER BY created_at ASC, id LIMIT $1`, limit)
+	if err != nil {
+		return nil, mapError(err)
+	}
+	defer rows.Close()
+
+	out := make([]domain.Signal, 0)
+	for rows.Next() {
+		var s domain.Signal
+		var payload []byte
+		var processed *time.Time
+		if err := rows.Scan(&s.ID, &s.GoalID, &s.Kind, &s.Description, &payload, &s.CreatedAt,
+			&s.Status, &s.Reason, &s.ResultVersion, &s.Error, &processed); err != nil {
+			return nil, mapError(err)
+		}
+		if err := unmarshalJSON(payload, &s.Payload); err != nil {
+			return nil, err
+		}
+		s.ProcessedAt = processed
+		out = append(out, s)
+	}
+	return out, rows.Err()
+}
+
 func (r *PostgresRepository) GetSignal(ctx context.Context, id string) (domain.Signal, error) {
 	var s domain.Signal
 	var payload []byte

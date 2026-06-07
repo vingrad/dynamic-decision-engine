@@ -182,9 +182,26 @@ func newServeCommand() *cobra.Command {
 
 			opts := []app.Option{app.WithMetrics(metrics), app.WithLogger(log), app.WithRegistry(reg)}
 			if cfg.ReplanAsync {
-				opts = append(opts, app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log)))
+				opts = append(opts,
+					app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log, app.WithQueueTimeout(cfg.ReplanTimeout))),
+					app.WithReplanRetries(cfg.ReplanMaxRetries),
+				)
 			}
 			svc := app.New(repo, eng, opts...)
+			// Re-enqueue replans left pending by a previous crash (async only — the
+			// in-memory queue loses scheduled work on restart; inline never does).
+			if cfg.ReplanAsync {
+				go func() {
+					n, err := svc.RecoverPending(ctx)
+					if err != nil {
+						log.Error("replan recovery failed", "err", err)
+						return
+					}
+					if n > 0 {
+						log.Info("recovered pending replans", "count", n)
+					}
+				}()
+			}
 			// Drain in-flight async replanning on shutdown.
 			defer func() {
 				sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -89,6 +89,7 @@ type MemoryQueue struct {
 	workers int
 	log     *slog.Logger
 	handler ReplanHandler
+	timeout time.Duration // per-job deadline; 0 means no timeout
 
 	maxSeen int
 
@@ -108,11 +109,20 @@ type MemoryQueue struct {
 // long-running process.
 const defaultMaxSeen = 100_000
 
+// QueueOption customises a MemoryQueue.
+type QueueOption func(*MemoryQueue)
+
+// WithQueueTimeout bounds each replan job with a deadline so a hung planner cannot
+// wedge a worker permanently. A non-positive duration leaves jobs unbounded.
+func WithQueueTimeout(d time.Duration) QueueOption {
+	return func(q *MemoryQueue) { q.timeout = d }
+}
+
 // NewMemoryQueue returns an async queue with the given worker count and channel
 // buffer. Jobs are kept in a per-plan FIFO so every distinct signal is processed
 // (in order); duplicate signal IDs are skipped (idempotency). Work for one plan is
 // serialised, so concurrent signals never race on the version write.
-func NewMemoryQueue(workers, buffer int, log *slog.Logger) *MemoryQueue {
+func NewMemoryQueue(workers, buffer int, log *slog.Logger, opts ...QueueOption) *MemoryQueue {
 	if workers < 1 {
 		workers = 1
 	}
@@ -122,7 +132,7 @@ func NewMemoryQueue(workers, buffer int, log *slog.Logger) *MemoryQueue {
 	if log == nil {
 		log = slog.Default()
 	}
-	return &MemoryQueue{
+	q := &MemoryQueue{
 		workers: workers,
 		log:     log,
 		maxSeen: defaultMaxSeen,
@@ -131,6 +141,10 @@ func NewMemoryQueue(workers, buffer int, log *slog.Logger) *MemoryQueue {
 		seen:    map[string]bool{},
 		ch:      make(chan string, buffer),
 	}
+	for _, opt := range opts {
+		opt(q)
+	}
+	return q
 }
 
 // markSeen records a signal ID for idempotency, evicting the oldest when over the
@@ -203,11 +217,25 @@ func (q *MemoryQueue) work() {
 			q.pending[planID] = fifo[1:]
 			q.mu.Unlock()
 
-			if _, err := q.handler(context.Background(), job); err != nil {
+			if err := q.runJob(job); err != nil {
 				q.log.Error("async replan failed", "plan_id", job.PlanID, "signal_id", job.SignalID, "err", err)
 			}
 		}
 	}
+}
+
+// runJob invokes the handler under a per-job deadline (when configured), so a hung
+// planner is cancelled rather than wedging the worker forever. The deadline bounds
+// the whole handler, including its internal conflict/transient retries.
+func (q *MemoryQueue) runJob(job ReplanJob) error {
+	ctx := context.Background()
+	if q.timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, q.timeout)
+		defer cancel()
+	}
+	_, err := q.handler(ctx, job)
+	return err
 }
 
 // Shutdown stops accepting new work and waits for workers to drain or ctx to end.

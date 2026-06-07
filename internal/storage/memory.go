@@ -249,6 +249,28 @@ func (m *MemoryRepository) MarkSignalProcessed(_ context.Context, id, status str
 	return ErrNotFound
 }
 
+func (m *MemoryRepository) ListPendingSignals(_ context.Context, limit int) ([]domain.Signal, error) {
+	if limit <= 0 {
+		return nil, nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	var out []domain.Signal
+	// Oldest first (insertion order) for FIFO-fair recovery.
+	for i := range m.signals {
+		// "pending" is the status the service writes on create; "" guards any signal
+		// persisted without an explicit status (mirrors the postgres column default).
+		if s := m.signals[i].Status; s == "pending" || s == "" {
+			out = append(out, cloneSignal(m.signals[i]))
+			if len(out) >= limit {
+				break
+			}
+		}
+	}
+	return out, nil
+}
+
 func (m *MemoryRepository) ListSignals(_ context.Context, goalID string, page Page) ([]domain.Signal, error) {
 	page = page.Normalize()
 	m.mu.RLock()
