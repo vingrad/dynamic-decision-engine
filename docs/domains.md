@@ -120,10 +120,56 @@ event's timestamp (no lookahead).
 
 ## Adding a new domain
 
-1. Add `internal/pack/<name>.go` returning a `Descriptor` (id, version, prompt
-   template, evaluator config, optional scoring, vocabulary, validation).
-2. Register it in `NewRegistry()`.
+### From config — no code (`DDE_DOMAINS`)
 
-That's it — the router, evaluator resolver, validation and API all pick it up.
-For a domain that needs a custom planner (like investing's numeric one), add a
-case in `internal/wire/planner.go`.
+A text/prompt domain is pure data, so you can add one without recompiling. Point
+`DDE_DOMAINS` at a JSON/YAML file (see `examples/domains.yaml`):
+
+```yaml
+domains:
+  - id: fitness
+    name: Fitness
+    prompt_template: |        # appended to the base planner prompt
+      DOMAIN: FITNESS
+      Treat each move as a training experiment ...
+    eval:
+      confidence_delta: 0.15  # materiality threshold
+    vocab:
+      asset_kinds: [time, equipment]
+    validation:
+      warn_unknown_kinds: false
+      rules:
+        - check: require_metric          # require_metric | require_context | require_any_kind
+          field: metric
+          message: "no fitness metric set"
+          severity: warning
+        - check: require_any_kind
+          kinds: [schedule, recovery]
+          scopes: [constraint]           # asset | constraint; empty = both
+          field: context.constraints
+          message: "no schedule or recovery constraint"
+          severity: warning
+```
+
+```bash
+DDE_DOMAINS=examples/domains.yaml dde evaluate --input fitness-goal.json
+```
+
+`version`/`prompt_version` default to `1`/`<id>-v1`. An optional `prompt_file:
+./prompt.txt` (resolved relative to the config file) loads the template from disk
+instead of inline. IDs must be unique and may not collide with a built-in
+(built-ins are authoritative). Numeric `scoring` is **not** config-loadable — use
+the `DDE_POLICY` file (above) for per-domain scoring; config domains are
+text/prompt domains.
+
+### Built-in (Go)
+
+For a shipped domain or one needing a numeric planner:
+
+1. Add `internal/pack/<name>.go` returning a `Descriptor` (id, version, prompt
+   template, evaluator config, optional scoring, vocabulary, declarative validation).
+2. Register it in `NewRegistry()` (`internal/pack/registry.go`).
+
+The router, evaluator resolver, validation and API all pick it up. For a numeric
+domain, set `PlannerKind` and register a builder in `internal/wire/builders.go` —
+no edit to `BuildPlannerRouter`.
