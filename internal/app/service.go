@@ -236,10 +236,14 @@ func (s *Service) GeneratePlan(ctx context.Context, goalID string) (domain.PlanV
 		CreatedAt:      now,
 		UpdatedAt:      now,
 	}
-	if err := s.repo.CreatePlan(ctx, &plan); err != nil {
-		return domain.PlanVersion{}, err
-	}
-	if err := s.repo.CreatePlanVersion(ctx, &version); err != nil {
+	// The plan head and its first version must be created atomically: a failure
+	// between them would orphan a plan head with no versions.
+	if err := s.repo.Tx(ctx, func(tx storage.Repository) error {
+		if err := tx.CreatePlan(ctx, &plan); err != nil {
+			return err
+		}
+		return tx.CreatePlanVersion(ctx, &version)
+	}); err != nil {
 		return domain.PlanVersion{}, err
 	}
 	s.metrics.PlanVersionCreated(goal.Domain)
