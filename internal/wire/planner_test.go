@@ -24,6 +24,37 @@ func plan(t *testing.T, p llm.Planner, domainKey string) llm.PlanResult {
 	return res
 }
 
+// TestBuildPlannerRouterBaseFor: a per-domain base (the C2 seam) routes that domain
+// to its own planner, still wrapped by the guided pack stamp, while other domains
+// and the default keep the global base.
+func TestBuildPlannerRouterBaseFor(t *testing.T) {
+	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
+		Base: llm.NewMockPlanner(),
+		BaseFor: func(id string) llm.Planner {
+			if id == "growth" {
+				return sentinelPlanner{}
+			}
+			return nil // others fall back to Base
+		},
+	})
+
+	// growth uses the override base, still pack-stamped by the guided wrapper.
+	gr := plan(t, router, "growth")
+	if gr.Provenance.Planner != "sentinel" || gr.Provenance.PackID != "growth" {
+		t.Errorf("growth should use the per-domain base, guided-stamped: %+v", gr.Provenance)
+	}
+	// career (no override) keeps the global base.
+	ca := plan(t, router, "career")
+	if ca.Provenance.Planner != "mock" || ca.Provenance.PackID != "career" {
+		t.Errorf("career should keep the global base: %+v", ca.Provenance)
+	}
+	// generic/default keeps the global base, unstamped.
+	gen := plan(t, router, "")
+	if gen.Provenance.Planner != "mock" || gen.Provenance.PackID != "" {
+		t.Errorf("default should keep the global base, unstamped: %+v", gen.Provenance)
+	}
+}
+
 func TestBuildPlannerRouterRoutes(t *testing.T) {
 	prov, err := marketdata.NewOfflineProvider()
 	if err != nil {

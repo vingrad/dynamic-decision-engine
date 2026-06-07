@@ -90,6 +90,44 @@ func newMultiPlanner(cfg config.Config) llm.Planner {
 	}
 }
 
+// plannerFromSpec builds a planner for a per-domain policy override. It overlays
+// only the spec's non-empty fields onto a copy of cfg (so a spec that sets just a
+// model keeps the global strategy) and reuses newPlanner.
+func plannerFromSpec(spec policy.PlannerSpec, cfg config.Config) llm.Planner {
+	c := cfg
+	if spec.Planner != "" {
+		c.Planner = spec.Planner
+	}
+	if spec.MultiMode != "" {
+		c.MultiMode = spec.MultiMode
+	}
+	if len(spec.MultiProviders) > 0 {
+		c.MultiProviders = spec.MultiProviders
+	}
+	if spec.Model != "" {
+		c.LLMModel = spec.Model
+	}
+	return newPlanner(c)
+}
+
+// domainBaseResolver returns a per-domain base-planner resolver: a domain with a
+// policy planner override gets its own planner (built once and memoised by id);
+// every other domain uses the global base. Returned as wire.PlannerDeps.BaseFor.
+func domainBaseResolver(cfg config.Config, pol policy.Policy, globalBase llm.Planner) func(string) llm.Planner {
+	cache := map[string]llm.Planner{}
+	return func(id string) llm.Planner {
+		if p, ok := cache[id]; ok {
+			return p
+		}
+		p := globalBase
+		if dp, ok := pol.For(id); ok && dp.Planner != nil {
+			p = plannerFromSpec(*dp.Planner, cfg)
+		}
+		cache[id] = p
+		return p
+	}
+}
+
 // newProvider builds the market-data provider for the finance planner. Offline
 // (embedded fixtures, no network) is the default; "http" selects the vendor stub.
 func newProvider(cfg config.Config) (marketdata.Provider, error) {
@@ -141,8 +179,10 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 			financeCache = llm.NewMemoryCacheTTL(cfg.PlanCacheSize, cfg.PlanCacheTTL, nil)
 		}
 	}
+	globalBase := newPlanner(cfg)
 	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
-		Base:         newPlanner(cfg),
+		Base:         globalBase,
+		BaseFor:      domainBaseResolver(cfg, pol, globalBase),
 		DataSources:  marketDataSources(provider),
 		Cache:        cache,
 		FinanceCache: financeCache,
