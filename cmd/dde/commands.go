@@ -188,10 +188,20 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		FinanceCache: financeCache,
 		CacheObs:     cacheObs,
 	})
-	return engine.New(router,
+	opts := []engine.Option{
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
-	), nil
+	}
+	// External-data enrichment is opt-in: only when enabled do we attach a source
+	// resolver, so the default (and the deterministic offline mock) is untouched.
+	if cfg.SourcesEnabled {
+		srcDeps, err := buildSourceDeps(cfg)
+		if err != nil {
+			return nil, err
+		}
+		opts = append(opts, engine.WithSourceResolver(wire.NewSourceResolver(reg, pol, srcDeps)))
+	}
+	return engine.New(router, opts...), nil
 }
 
 // newServeCommand runs the REST API server.

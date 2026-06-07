@@ -79,6 +79,15 @@ type Config struct {
 	// ReplanMaxRetries is how many extra times an async replan retries a transient
 	// planner error (with backoff) before recording the signal as failed.
 	ReplanMaxRetries int `json:"replan_max_retries" yaml:"replan_max_retries"`
+	// SourcesEnabled turns on Phase-1 external-data enrichment. Default false so all
+	// existing behaviour (and the offline mock) stays byte-for-byte unchanged.
+	SourcesEnabled bool `json:"sources_enabled" yaml:"sources_enabled"`
+	// SourceTimeout bounds a single source Fetch; on expiry the source is recorded
+	// stale and the decision proceeds. 0 means no per-source deadline.
+	SourceTimeout time.Duration `json:"source_timeout" yaml:"source_timeout"`
+	// SourcesConfigPath optionally points at a JSON/YAML file declaring source
+	// adapters (HTTP endpoints, etc.) keyed by name (DDE_SOURCES). Empty means none.
+	SourcesConfigPath string `json:"sources_file" yaml:"sources_file"`
 }
 
 // Default returns the baseline configuration used when nothing else is set.
@@ -111,6 +120,9 @@ func Default() Config {
 		ReplanWorkers:            4,
 		ReplanTimeout:            60 * time.Second,
 		ReplanMaxRetries:         2,
+		SourcesEnabled:           false,
+		SourceTimeout:            5 * time.Second,
+		SourcesConfigPath:        "",
 	}
 }
 
@@ -254,6 +266,17 @@ func applyEnv(cfg *Config) {
 			cfg.ReplanMaxRetries = n
 		}
 	}
+	if v := os.Getenv("DDE_SOURCES_ENABLED"); v != "" {
+		cfg.SourcesEnabled = v == "1" || strings.EqualFold(v, "true")
+	}
+	if v := os.Getenv("DDE_SOURCE_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.SourceTimeout = d
+		}
+	}
+	if v := os.Getenv("DDE_SOURCES"); v != "" {
+		cfg.SourcesConfigPath = v
+	}
 }
 
 // Validate checks the configuration for obviously invalid values.
@@ -298,6 +321,9 @@ func (c Config) Validate() error {
 	}
 	if c.ReplanMaxRetries < 0 {
 		return fmt.Errorf("config: replan_max_retries must not be negative")
+	}
+	if c.SourceTimeout < 0 {
+		return fmt.Errorf("config: source_timeout must not be negative")
 	}
 	return nil
 }

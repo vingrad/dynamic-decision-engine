@@ -36,3 +36,37 @@ domains:
           field: context.constraints
           message: "no schedule or recovery constraint; plans may be unsustainable"
           severity: warning
+
+  - id: purchasing
+    name: Purchasing
+    prompt_template: |
+      DOMAIN: PURCHASING
+      Frame each move as a buying decision: what to buy, when, and from whom, given
+      the budget and constraints. For every move:
+      - State the option (product/vendor) and why it best fits the objective.
+      - Respect budget, deadline and policy constraints as hard limits.
+      - Use live facts (prices, availability, delivery) when present in context;
+        prefer the cheapest acceptable option that meets the requirements.
+      - Make kill_criteria a price/availability threshold that should trigger a
+        re-decision (e.g. "abort if price rises above budget before purchase").
+      Be explicit about trade-offs; a "wait for a better price" move is valid when
+      justified by the deadline.
+    # Consult the "pricefeed" source (defined in the sources file, DDE_SOURCES)
+    # before planning, folding live prices/availability into the goal context.
+    source_kinds: [pricefeed]
+    eval:
+      # Purchases react to price moves, so a modest confidence shift is material.
+      confidence_delta: 0.08
+    vocab:
+      asset_kinds: [budget, existing_equipment, loyalty, data]
+      constraint_kinds: [budget, deadline, brand_policy, warranty]
+      signal_kinds: [price_drop, out_of_stock, new_model, review_change]
+    validation:
+      warn_unknown_kinds: false
+      rules:
+        - check: require_any_kind
+          kinds: [budget]
+          scopes: [constraint]
+          field: context.constraints
+          message: "no budget constraint; purchase options cannot be bounded"
+          severity: warning

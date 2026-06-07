@@ -12,11 +12,12 @@ import (
 // Engine generates plans and drives the replanning loop. It is safe for
 // concurrent use provided its Planner and Evaluator are.
 type Engine struct {
-	planner      llm.Planner
-	evaluator    Evaluator
-	resolver     EvaluatorResolver
-	gateResolver GateResolver
-	clock        func() time.Time
+	planner        llm.Planner
+	evaluator      Evaluator
+	resolver       EvaluatorResolver
+	gateResolver   GateResolver
+	sourceResolver SourceResolver
+	clock          func() time.Time
 }
 
 // Option customises an Engine.
@@ -41,6 +42,14 @@ func WithEvaluatorResolver(r EvaluatorResolver) Option {
 // behaviour.
 func WithGateResolver(r GateResolver) Option {
 	return func(en *Engine) { en.gateResolver = r }
+}
+
+// WithSourceResolver enables per-domain external-data enrichment. When set, the
+// engine fetches fresh state for each goal's domain and folds it into the goal
+// Context before planning; when nil no enrichment happens, preserving the original
+// offline behaviour (and keeping the mock planner byte-for-byte deterministic).
+func WithSourceResolver(r SourceResolver) Option {
+	return func(en *Engine) { en.sourceResolver = r }
 }
 
 // WithClock overrides the time source (useful for deterministic tests).
@@ -72,10 +81,12 @@ func (e *Engine) GenerateInitialPlan(ctx context.Context, goal domain.Goal) (dom
 // signal note into the planner input. It is the stateless primitive behind both
 // GenerateInitialPlan and the /v1/evaluate endpoint; nothing is persisted.
 func (e *Engine) Evaluate(ctx context.Context, goal domain.Goal, signalNote string) (domain.PlanVersion, error) {
+	goal, contribs := e.enrich(ctx, goal, "", nil)
 	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote})
 	if err != nil {
 		return domain.PlanVersion{}, fmt.Errorf("engine: evaluate: %w", err)
 	}
+	res.Provenance.SourceContributions = contribs
 	return e.buildVersion(domain.NewID("plan"), 1, goal, res), nil
 }
 
@@ -95,6 +106,22 @@ func (e *Engine) gateFor(goal domain.Goal) ReplanGate {
 		return nil
 	}
 	return e.gateResolver.GateFor(goal.Domain)
+}
+
+// enrich folds fresh external state into the goal Context before planning, returning
+// the enriched goal and the audit records of every source consulted. When no source
+// resolver is configured it is a no-op that returns the goal unchanged — guaranteeing
+// the offline/mock path stays byte-for-byte identical and the input snapshot is
+// unaffected. The fetch runs under the caller's context so cancellation propagates.
+func (e *Engine) enrich(ctx context.Context, goal domain.Goal, signalKind string, payload map[string]any) (domain.Goal, []domain.SourceContribution) {
+	if e.sourceResolver == nil {
+		return goal, nil
+	}
+	enricher := e.sourceResolver.SourcesFor(goal.Domain)
+	if enricher == nil {
+		return goal, nil
+	}
+	return enricher.Enrich(ctx, goal, signalKind, payload)
 }
 
 // buildVersion assembles an immutable PlanVersion from a planner result. It is the

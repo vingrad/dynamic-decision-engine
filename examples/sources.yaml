@@ -1,0 +1,22 @@
+# External data sources loaded at startup when enrichment is enabled:
+#   DDE_SOURCES_ENABLED=true DDE_SOURCES=examples/sources.yaml
+#
+# Each entry is a source adapter, referenced by `name` from a domain's
+# `source_kinds` (see the purchasing domain in examples/domains.yaml). Before
+# planning, the engine fetches from the domain's sources and folds the result into
+# the goal context, so the planner reasons over live state. The fetched data is
+# captured in the input snapshot (reproducible) and every source consulted is
+# recorded in plan provenance under `source_contributions`.
+#
+# An "http" source GETs its endpoint (with goal_id / signal_kind query params) and
+# expects a JSON body shaped like a context delta:
+#   {"facts": ["..."], "assets": [...], "constraints": [...]}
+# If the endpoint is unreachable or returns non-200, the source degrades to a
+# `stale` contribution and the decision still proceeds — it never blocks.
+sources:
+  - name: pricefeed
+    kind: http
+    domain: purchasing
+    endpoint: http://localhost:8090/pricefeed
+    # Optional: name of an env var holding a bearer token for the endpoint.
+    # api_key_env: PRICEFEED_API_KEY

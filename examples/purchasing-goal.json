@@ -1,0 +1,20 @@
+{
+  "domain": "purchasing",
+  "objective": "Buy a laptop for software development within budget before the new role starts",
+  "metric": "total cost (USD)",
+  "target": "<= 1500",
+  "context": {
+    "situation": "Replacing an aging laptop. Need it within two weeks. Prefer a model with strong battery life and a good keyboard.",
+    "facts": [
+      "Current machine is 6 years old and frequently thermal-throttles",
+      "A holiday sale is rumoured to start next week"
+    ],
+    "assets": [
+      { "name": "education discount", "kind": "loyalty", "description": "Eligible for ~8% off select vendors" }
+    ],
+    "constraints": [
+      { "name": "1500 USD budget", "kind": "budget", "description": "Hard cap including tax and accessories" },
+      { "name": "two-week deadline", "kind": "deadline", "description": "Must arrive before the start date" }
+    ]
+  }
+}
