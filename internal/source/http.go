@@ -106,7 +106,7 @@ func (s *HTTPSource) Fetch(ctx context.Context, q Query) (Result, error) {
 	}
 	return Result{
 		SourceName: s.name,
-		Delta:      ContextDelta{Facts: wd.Facts, Assets: wd.Assets, Constraints: wd.Constraints},
+		Delta:      ContextDelta(wd),
 		Raw:        json.RawMessage(body),
 	}, nil
 }
