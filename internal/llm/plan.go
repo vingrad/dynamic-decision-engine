@@ -158,3 +158,128 @@ func planSchema() (properties map[string]any, required []string) {
 	required = []string{"summary", "reasoning_summary", "ranked_moves"}
 	return properties, required
 }
+
+// --- Verification (cross-model review) --------------------------------------
+
+// verifyToolName is the tool a verifier model is forced to call.
+const verifyToolName = "review_plan"
+
+// verifySystemPrompt frames the reviewer's job: critique, don't rewrite.
+const verifySystemPrompt = `You are an independent reviewer of a proposed decision plan.
+
+You did NOT write this plan. Critically assess each ranked move for: factual
+support in the given context (flag claims that assume assets or facts not present),
+realistic confidence calibration, and whether the move actually advances the goal.
+
+For each move return a verdict: keep (true/false), an optional adjusted_confidence
+in [0,1] when the proposer's confidence is mis-calibrated, and any concrete issues.
+Be willing to drop weak or unsupported moves. Return your review by calling the
+review_plan tool — do not write prose outside the tool call.`
+
+// Verdict is a verifier's review of a proposed plan.
+type Verdict struct {
+	OverallNote string        `json:"overall_note"`
+	Moves       []MoveVerdict `json:"moves"`
+}
+
+// MoveVerdict is the review of a single move, matched to the proposal by Title.
+type MoveVerdict struct {
+	Title              string   `json:"title"`
+	Keep               bool     `json:"keep"`
+	AdjustedConfidence *float64 `json:"adjusted_confidence"`
+	Issues             []string `json:"issues"`
+}
+
+// verifyUserPayload serialises the goal and the proposed moves for review.
+func verifyUserPayload(g domain.Goal, proposed PlanResult) (string, error) {
+	type reviewMove struct {
+		Title          string  `json:"title"`
+		Description    string  `json:"description"`
+		Confidence     float64 `json:"confidence"`
+		ExpectedImpact string  `json:"expected_impact"`
+		Effort         string  `json:"effort"`
+		Risk           string  `json:"risk"`
+		Rationale      string  `json:"rationale"`
+	}
+	moves := make([]reviewMove, len(proposed.RankedMoves))
+	for i, m := range proposed.RankedMoves {
+		moves[i] = reviewMove{
+			Title: m.Title, Description: m.Description, Confidence: m.Confidence,
+			ExpectedImpact: string(m.ExpectedImpact), Effort: string(m.Effort),
+			Risk: string(m.Risk), Rationale: m.Rationale,
+		}
+	}
+	b, err := json.MarshalIndent(struct {
+		Objective    string         `json:"objective"`
+		Metric       string         `json:"metric,omitempty"`
+		Target       string         `json:"target,omitempty"`
+		Context      domain.Context `json:"context"`
+		ProposedPlan []reviewMove   `json:"proposed_plan"`
+	}{g.Objective, g.Metric, g.Target, g.Context, moves}, "", "  ")
+	if err != nil {
+		return "", fmt.Errorf("llm: marshal verify request: %w", err)
+	}
+	return string(b), nil
+}
+
+// verifySchema returns the JSON schema for the review_plan tool.
+func verifySchema() (properties map[string]any, required []string) {
+	properties = map[string]any{
+		"overall_note": map[string]any{"type": "string"},
+		"moves": map[string]any{
+			"type": "array",
+			"items": map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"title":               map[string]any{"type": "string"},
+					"keep":                map[string]any{"type": "boolean"},
+					"adjusted_confidence": map[string]any{"type": "number"},
+					"issues":              map[string]any{"type": "array", "items": map[string]any{"type": "string"}},
+				},
+				"required": []string{"title", "keep"},
+			},
+		},
+	}
+	required = []string{"overall_note", "moves"}
+	return properties, required
+}
+
+// applyVerdict mutates a proposer's result according to a verifier's verdict:
+// drops moves marked keep=false, applies adjusted confidence, collects issues,
+// and re-numbers the surviving moves 1..N.
+func applyVerdict(result PlanResult, v Verdict) (PlanResult, []string) {
+	byTitle := make(map[string]MoveVerdict, len(v.Moves))
+	for _, mv := range v.Moves {
+		byTitle[mv.Title] = mv
+	}
+	var kept []domain.RankedMove
+	var issues []string
+	for _, m := range result.RankedMoves {
+		mv, reviewed := byTitle[m.Title]
+		if reviewed && !mv.Keep {
+			issues = append(issues, "dropped \""+m.Title+"\": "+joinIssues(mv.Issues))
+			continue
+		}
+		if reviewed && mv.AdjustedConfidence != nil {
+			m.Confidence = clampConfidence(*mv.AdjustedConfidence)
+		}
+		if reviewed && len(mv.Issues) > 0 {
+			issues = append(issues, "\""+m.Title+"\": "+joinIssues(mv.Issues))
+		}
+		m.Rank = len(kept) + 1
+		kept = append(kept, m)
+	}
+	result.RankedMoves = kept
+	return result, issues
+}
+
+func joinIssues(issues []string) string {
+	if len(issues) == 0 {
+		return "no detail"
+	}
+	out := issues[0]
+	for _, s := range issues[1:] {
+		out += "; " + s
+	}
+	return out
+}

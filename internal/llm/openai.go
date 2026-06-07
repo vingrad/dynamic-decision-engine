@@ -88,6 +88,9 @@ func NewOpenAIPlanner(cfg OpenAIConfig) *OpenAIPlanner {
 // backend produced the plan.
 func (p *OpenAIPlanner) Name() string { return p.provider }
 
+// VerifierName implements PlanVerifier.
+func (p *OpenAIPlanner) VerifierName() string { return p.provider }
+
 // GeneratePlan implements Planner via a forced function call.
 func (p *OpenAIPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (PlanResult, error) {
 	g := req.Goal
@@ -99,19 +102,67 @@ func (p *OpenAIPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Plan
 	if err != nil {
 		return PlanResult{}, err
 	}
-
 	properties, required := planSchema()
+	raw, inv, err := p.callStructured(ctx, systemPrompt, userPayload, planToolName, properties, required)
+	if err != nil {
+		return PlanResult{}, err
+	}
+
+	var dto planDTO
+	if err := json.Unmarshal(raw, &dto); err != nil {
+		return PlanResult{}, fmt.Errorf("llm: decode tool arguments: %w", err)
+	}
+	if len(dto.RankedMoves) == 0 {
+		return PlanResult{}, fmt.Errorf("llm: model returned no ranked moves")
+	}
+
+	return PlanResult{
+		Summary:     dto.Summary,
+		RankedMoves: mapMoves(dto),
+		Provenance: domain.DecisionProvenance{
+			ReasoningSummary: dto.ReasoningSummary,
+			InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
+			Planner:          p.provider,
+			PromptVersion:    p.provider + "-v1",
+			Model:            p.model,
+			Strategy:         "single",
+		},
+		Invocation: inv,
+	}, nil
+}
+
+// VerifyPlan implements PlanVerifier by asking the model to review a proposed plan.
+func (p *OpenAIPlanner) VerifyPlan(ctx context.Context, goal domain.Goal, proposed PlanResult) (Verdict, domain.ModelInvocation, error) {
+	userPayload, err := verifyUserPayload(goal, proposed)
+	if err != nil {
+		return Verdict{}, domain.ModelInvocation{}, err
+	}
+	properties, required := verifySchema()
+	raw, inv, err := p.callStructured(ctx, verifySystemPrompt, userPayload, verifyToolName, properties, required)
+	if err != nil {
+		return Verdict{}, domain.ModelInvocation{}, err
+	}
+	var v Verdict
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return Verdict{}, domain.ModelInvocation{}, fmt.Errorf("llm: decode verdict: %w", err)
+	}
+	return v, inv, nil
+}
+
+// callStructured runs a forced function call and returns the raw arguments JSON
+// plus invocation metadata. Shared by GeneratePlan and VerifyPlan.
+func (p *OpenAIPlanner) callStructured(ctx context.Context, system, userJSON, toolName string, properties map[string]any, required []string) ([]byte, domain.ModelInvocation, error) {
 	params := openai.ChatCompletionNewParams{
 		Model:               p.model,
 		MaxCompletionTokens: openai.Int(p.maxTokens),
 		Messages: []openai.ChatCompletionMessageParamUnion{
-			openai.SystemMessage(systemPrompt),
-			openai.UserMessage(userPayload),
+			openai.SystemMessage(system),
+			openai.UserMessage(userJSON),
 		},
 		Tools: []openai.ChatCompletionToolUnionParam{
 			openai.ChatCompletionFunctionTool(shared.FunctionDefinitionParam{
-				Name:        planToolName,
-				Description: openai.String("Submit the ranked action plan for the given goal."),
+				Name:        toolName,
+				Description: openai.String("Return the structured result by calling this function."),
 				Parameters: shared.FunctionParameters{
 					"type":       "object",
 					"properties": properties,
@@ -119,64 +170,31 @@ func (p *OpenAIPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Plan
 				},
 			}),
 		},
-		// Force the model to answer by calling submit_plan, guaranteeing structured output.
 		ToolChoice: openai.ToolChoiceOptionFunctionToolChoice(
-			openai.ChatCompletionNamedToolChoiceFunctionParam{Name: planToolName},
+			openai.ChatCompletionNamedToolChoiceFunctionParam{Name: toolName},
 		),
 	}
 
 	start := time.Now()
 	resp, err := p.client.Chat.Completions.New(ctx, params)
 	if err != nil {
-		return PlanResult{}, fmt.Errorf("llm: %s request: %w", p.provider, err)
+		return nil, domain.ModelInvocation{}, fmt.Errorf("llm: %s request: %w", p.provider, err)
 	}
-	latency := time.Since(start)
-
-	dto, err := extractOpenAIPlan(resp)
-	if err != nil {
-		return PlanResult{}, err
-	}
-	if len(dto.RankedMoves) == 0 {
-		return PlanResult{}, fmt.Errorf("llm: model returned no ranked moves")
-	}
-
-	promptVersion := p.provider + "-v1"
-	prov := domain.DecisionProvenance{
-		ReasoningSummary: dto.ReasoningSummary,
-		InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
-		Planner:          p.provider,
-		PromptVersion:    promptVersion,
+	inv := domain.ModelInvocation{
 		Model:            p.model,
+		PromptVersion:    p.provider + "-v1",
+		PromptTokens:     int(resp.Usage.PromptTokens),
+		CompletionTokens: int(resp.Usage.CompletionTokens),
+		TotalTokens:      int(resp.Usage.TotalTokens),
+		LatencyMS:        time.Since(start).Milliseconds(),
 	}
-
-	return PlanResult{
-		Summary:     dto.Summary,
-		RankedMoves: mapMoves(dto),
-		Provenance:  prov,
-		Invocation: domain.ModelInvocation{
-			Model:            p.model,
-			PromptVersion:    promptVersion,
-			PromptTokens:     int(resp.Usage.PromptTokens),
-			CompletionTokens: int(resp.Usage.CompletionTokens),
-			TotalTokens:      int(resp.Usage.TotalTokens),
-			LatencyMS:        latency.Milliseconds(),
-		},
-	}, nil
-}
-
-// extractOpenAIPlan pulls the forced function call's arguments and decodes them.
-func extractOpenAIPlan(resp *openai.ChatCompletion) (planDTO, error) {
 	if len(resp.Choices) == 0 {
-		return planDTO{}, fmt.Errorf("llm: model returned no choices")
+		return nil, inv, fmt.Errorf("llm: model returned no choices")
 	}
 	for _, call := range resp.Choices[0].Message.ToolCalls {
-		if call.Function.Name == planToolName {
-			var dto planDTO
-			if err := json.Unmarshal([]byte(call.Function.Arguments), &dto); err != nil {
-				return planDTO{}, fmt.Errorf("llm: decode tool arguments: %w", err)
-			}
-			return dto, nil
+		if call.Function.Name == toolName {
+			return []byte(call.Function.Arguments), inv, nil
 		}
 	}
-	return planDTO{}, fmt.Errorf("llm: model did not call %s", planToolName)
+	return nil, inv, fmt.Errorf("llm: model did not call %s", toolName)
 }

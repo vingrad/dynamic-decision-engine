@@ -28,8 +28,19 @@ type Config struct {
 	// LogFormat is "json" or "text".
 	LogFormat string `json:"log_format" yaml:"log_format"`
 	// Planner selects the reasoning backend: "mock" (default), "anthropic",
-	// "openai" or "deepseek".
+	// "openai", "deepseek", or "multi" (a multi-model composition).
 	Planner string `json:"planner" yaml:"planner"`
+	// MultiMode selects the multi-model strategy when Planner=="multi":
+	// "verify", "route" or "ensemble".
+	MultiMode string `json:"multi_mode" yaml:"multi_mode"`
+	// MultiProviders is the ordered provider list for the multi planner, e.g.
+	// ["anthropic","openai"]. Roles depend on MultiMode: verify→[proposer,verifier];
+	// route→[cheap,strong]; ensemble→all members. "mock" is allowed for offline use.
+	MultiProviders []string `json:"multi_providers" yaml:"multi_providers"`
+	// MultiConfidenceThreshold is the router's escalation threshold (top-move confidence).
+	MultiConfidenceThreshold float64 `json:"multi_confidence_threshold" yaml:"multi_confidence_threshold"`
+	// MultiEscalateOnSignal makes the router send re-plans (signals) to the strong model.
+	MultiEscalateOnSignal bool `json:"multi_escalate_on_signal" yaml:"multi_escalate_on_signal"`
 	// LLMModel is the model id for a real LLM planner (e.g. "claude-opus-4-8").
 	LLMModel string `json:"llm_model" yaml:"llm_model"`
 	// LLMMaxTokens bounds the model's output for a real LLM planner.
@@ -55,10 +66,14 @@ func Default() Config {
 		// LLMModel is empty by default so each planner applies its own
 		// provider-appropriate default (Anthropic→claude-opus-4-8,
 		// OpenAI→gpt-4o, DeepSeek→deepseek-chat). Override with DDE_LLM_MODEL.
-		LLMModel:           "",
-		LLMMaxTokens:       4096,
-		RequestTimeout:     15 * time.Second,
-		CORSAllowedOrigins: []string{"http://localhost:3000"},
+		LLMModel:                 "",
+		LLMMaxTokens:             4096,
+		MultiMode:                "verify",
+		MultiProviders:           nil,
+		MultiConfidenceThreshold: 0.6,
+		MultiEscalateOnSignal:    true,
+		RequestTimeout:           15 * time.Second,
+		CORSAllowedOrigins:       []string{"http://localhost:3000"},
 	}
 }
 
@@ -137,6 +152,20 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("DDE_LLM_BASE_URL"); v != "" {
 		cfg.LLMBaseURL = v
 	}
+	if v := os.Getenv("DDE_MULTI_MODE"); v != "" {
+		cfg.MultiMode = v
+	}
+	if v := os.Getenv("DDE_MULTI_PROVIDERS"); v != "" {
+		cfg.MultiProviders = splitAndTrim(v)
+	}
+	if v := os.Getenv("DDE_MULTI_CONFIDENCE_THRESHOLD"); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			cfg.MultiConfidenceThreshold = f
+		}
+	}
+	if v := os.Getenv("DDE_MULTI_ESCALATE_ON_SIGNAL"); v != "" {
+		cfg.MultiEscalateOnSignal = v == "true" || v == "1"
+	}
 	if v := os.Getenv("DDE_REQUEST_TIMEOUT"); v != "" {
 		if d, err := time.ParseDuration(v); err == nil {
 			cfg.RequestTimeout = d
@@ -164,6 +193,15 @@ func (c Config) Validate() error {
 	}
 	switch c.Planner {
 	case "mock", "anthropic", "openai", "deepseek":
+	case "multi":
+		switch c.MultiMode {
+		case "verify", "route", "ensemble":
+		default:
+			return fmt.Errorf("config: invalid multi_mode %q (want verify|route|ensemble)", c.MultiMode)
+		}
+		if len(c.MultiProviders) < 2 {
+			return fmt.Errorf("config: planner=multi needs at least 2 providers (DDE_MULTI_PROVIDERS)")
+		}
 	default:
 		return fmt.Errorf("config: invalid planner %q", c.Planner)
 	}

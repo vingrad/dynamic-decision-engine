@@ -24,7 +24,16 @@ import (
 // newPlanner selects the reasoning backend named in config. The mock is the
 // default and runs with no external dependencies.
 func newPlanner(cfg config.Config) llm.Planner {
-	switch cfg.Planner {
+	if cfg.Planner == "multi" {
+		return newMultiPlanner(cfg)
+	}
+	return buildProvider(cfg.Planner, cfg)
+}
+
+// buildProvider constructs a single-provider planner by name. "mock" is included
+// so multi-model compositions can be exercised offline without API keys.
+func buildProvider(name string, cfg config.Config) llm.Planner {
+	switch name {
 	case "anthropic":
 		return llm.NewAnthropicPlanner(llm.AnthropicConfig{
 			APIKey:    os.Getenv("ANTHROPIC_API_KEY"),
@@ -49,6 +58,28 @@ func newPlanner(cfg config.Config) llm.Planner {
 		})
 	default:
 		return llm.NewMockPlanner()
+	}
+}
+
+// newMultiPlanner composes a multi-model planner from cfg.MultiProviders per the
+// selected mode. Config validation guarantees a valid mode and ≥2 providers.
+func newMultiPlanner(cfg config.Config) llm.Planner {
+	sub := make([]llm.Planner, len(cfg.MultiProviders))
+	for i, name := range cfg.MultiProviders {
+		sub[i] = buildProvider(name, cfg)
+	}
+	switch cfg.MultiMode {
+	case "route":
+		return llm.NewRouterPlanner(sub[0], sub[1], cfg.MultiConfidenceThreshold, cfg.MultiEscalateOnSignal)
+	case "ensemble":
+		return llm.NewEnsemblePlanner(sub...)
+	default: // "verify"
+		verifier, ok := buildProvider(cfg.MultiProviders[1], cfg).(llm.PlanVerifier)
+		if !ok {
+			// The mock planner can't verify; fall back to the proposer alone.
+			return sub[0]
+		}
+		return llm.NewVerifyPlanner(sub[0], verifier)
 	}
 }
 
