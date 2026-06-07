@@ -3,6 +3,8 @@ package llm
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
+	"unicode"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
@@ -25,8 +27,16 @@ success signals and kill/pivot criteria; and one or more fallback moves.
 
 Rank moves from strongest to weakest (the first is the top recommendation).
 Prefer moves that exploit existing assets and de-risk binding constraints. Be
-calibrated: do not inflate confidence. Return your answer by calling the
-submit_plan tool — do not write prose outside the tool call.`
+calibrated: do not inflate confidence.
+
+Give each move a short, stable "key": a lowercase slug naming the underlying
+action (e.g. "expand-paid-search"). When the input includes a "current_plan",
+reuse a move's existing key whenever your move is the same underlying action,
+even if you reword its title; mint a new key only for a genuinely new move. The
+key is identity; the title is display.
+
+Return your answer by calling the submit_plan tool — do not write prose outside
+the tool call.`
 
 // planDTO mirrors the submit_plan schema: the wire shape a model returns before
 // it is mapped into domain types. Shared by every real planner.
@@ -37,6 +47,7 @@ type planDTO struct {
 }
 
 type moveDTO struct {
+	Key            string        `json:"key"`
 	Title          string        `json:"title"`
 	Description    string        `json:"description"`
 	Confidence     float64       `json:"confidence"`
@@ -55,16 +66,33 @@ type experimentDTO struct {
 	KillCriteria   []string `json:"kill_criteria"`
 }
 
+// currentMove is the compact view of a prior plan's move handed to the model on a
+// replan, so it can preserve a move's stable key across rewordings.
+type currentMove struct {
+	Key   string `json:"key,omitempty"`
+	Title string `json:"title"`
+}
+
 // planUserPayload serialises the goal, context and any new signal into the JSON
-// the model reasons over.
-func planUserPayload(g domain.Goal, signalNote string) (string, error) {
+// the model reasons over. On a replan it also includes the structured signal
+// payload (so the model reasons over the numbers, not just the note) and the
+// current plan's moves (so it can reuse their keys for unchanged moves).
+func planUserPayload(req PlanRequest) (string, error) {
+	g := req.Goal
+	var current []currentMove
+	for _, m := range req.CurrentMoves {
+		current = append(current, currentMove{Key: m.Key, Title: m.Title})
+	}
 	b, err := json.MarshalIndent(struct {
-		Objective  string         `json:"objective"`
-		Metric     string         `json:"metric,omitempty"`
-		Target     string         `json:"target,omitempty"`
-		Context    domain.Context `json:"context"`
-		SignalNote string         `json:"new_signal,omitempty"`
-	}{g.Objective, g.Metric, g.Target, g.Context, signalNote}, "", "  ")
+		Objective   string         `json:"objective"`
+		Metric      string         `json:"metric,omitempty"`
+		Target      string         `json:"target,omitempty"`
+		Context     domain.Context `json:"context"`
+		SignalNote  string         `json:"new_signal,omitempty"`
+		SignalKind  string         `json:"new_signal_kind,omitempty"`
+		SignalData  map[string]any `json:"new_signal_data,omitempty"`
+		CurrentPlan []currentMove  `json:"current_plan,omitempty"`
+	}{g.Objective, g.Metric, g.Target, g.Context, req.SignalNote, req.SignalKind, req.SignalPayload, current}, "", "  ")
 	if err != nil {
 		return "", fmt.Errorf("llm: marshal request: %w", err)
 	}
@@ -78,6 +106,7 @@ func mapMoves(dto planDTO) []domain.RankedMove {
 	for i, m := range dto.RankedMoves {
 		moves[i] = domain.RankedMove{
 			Rank:           i + 1,
+			Key:            moveKeyOrSlug(m.Key, m.Title),
 			Title:          m.Title,
 			Description:    m.Description,
 			Confidence:     clampConfidence(m.Confidence),
@@ -95,6 +124,29 @@ func mapMoves(dto planDTO) []domain.RankedMove {
 		}
 	}
 	return moves
+}
+
+// moveKeyOrSlug returns the model-supplied key when present, otherwise a
+// slug-normalised title, so every move carries a stable identity even when the
+// model omits an explicit key.
+func moveKeyOrSlug(key, title string) string {
+	if key != "" {
+		return key
+	}
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range strings.ToLower(title) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			prevHyphen = false
+			continue
+		}
+		if !prevHyphen && b.Len() > 0 {
+			b.WriteByte('-')
+			prevHyphen = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }
 
 // level coerces a model-provided string into a valid Level, defaulting to medium.
@@ -132,6 +184,7 @@ func planSchema() (properties map[string]any, required []string) {
 			"items": map[string]any{
 				"type": "object",
 				"properties": map[string]any{
+					"key":             map[string]any{"type": "string"},
 					"title":           map[string]any{"type": "string"},
 					"description":     map[string]any{"type": "string"},
 					"confidence":      map[string]any{"type": "number"},

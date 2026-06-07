@@ -38,6 +38,7 @@ func New(reg *pack.Registry, pol policy.Policy, provider marketdata.Provider) *H
 	})
 	eng := engine.New(router,
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
+		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
 		engine.WithClock(sim.Now),
 	)
 	return &Harness{eng: eng, sim: sim, provider: provider}

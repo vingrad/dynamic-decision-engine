@@ -98,7 +98,7 @@ func (p *OpenAIPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Plan
 		return PlanResult{}, fmt.Errorf("llm: goal objective is required")
 	}
 
-	userPayload, err := planUserPayload(g, req.SignalNote)
+	userPayload, err := planUserPayload(req)
 	if err != nil {
 		return PlanResult{}, err
 	}

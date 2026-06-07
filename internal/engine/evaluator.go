@@ -2,6 +2,8 @@ package engine
 
 import (
 	"math"
+	"strings"
+	"unicode"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
@@ -31,7 +33,7 @@ func (t ThresholdEvaluator) IsMaterial(current, candidate []domain.RankedMove) (
 		return true, "candidate plan has no moves"
 	}
 
-	if current[0].Title != candidate[0].Title {
+	if moveKey(current[0]) != moveKey(candidate[0]) {
 		return true, "top-ranked move changed"
 	}
 	if !sameOrder(current, candidate) {
@@ -52,16 +54,45 @@ func (t ThresholdEvaluator) confidenceDelta() float64 {
 	return t.ConfidenceDelta
 }
 
-// sameOrder reports whether two move lists recommend the same titles in the same
-// order. Differing lengths count as a change in order.
+// sameOrder reports whether two move lists recommend the same moves in the same
+// order, compared by stable key. Differing lengths count as a change in order.
 func sameOrder(a, b []domain.RankedMove) bool {
 	if len(a) != len(b) {
 		return false
 	}
 	for i := range a {
-		if a[i].Title != b[i].Title {
+		if moveKey(a[i]) != moveKey(b[i]) {
 			return false
 		}
 	}
 	return true
+}
+
+// moveKey returns a move's stable identity for materiality comparison: its
+// explicit Key when set, otherwise a slug-normalised Title (lowercased, with runs
+// of non-alphanumeric characters collapsed to single hyphens). The fallback means
+// trivial title edits — punctuation, casing, spacing — do not read as a new move.
+func moveKey(m domain.RankedMove) string {
+	if m.Key != "" {
+		return m.Key
+	}
+	return slug(m.Title)
+}
+
+// slug normalises a string to lowercase alphanumeric tokens joined by hyphens.
+func slug(s string) string {
+	var b strings.Builder
+	prevHyphen := false
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+			prevHyphen = false
+			continue
+		}
+		if !prevHyphen && b.Len() > 0 {
+			b.WriteByte('-')
+			prevHyphen = true
+		}
+	}
+	return strings.Trim(b.String(), "-")
 }

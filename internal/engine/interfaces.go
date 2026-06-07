@@ -22,3 +22,21 @@ type Evaluator interface {
 type EvaluatorResolver interface {
 	EvaluatorFor(domainKey string) Evaluator
 }
+
+// ReplanGate is a cheap pre-filter applied before the (expensive) plan
+// regeneration on a replan. It lets a domain short-circuit signals that cannot
+// move the plan — e.g. a kind it never acts on — without paying for a full
+// GeneratePlan call. Returning proceed=false skips regeneration and leaves the
+// current version authoritative; the reason is recorded for audit.
+type ReplanGate interface {
+	// ShouldReplan reports whether the signal warrants regenerating the plan. The
+	// returned reason explains the decision (used when proceed is false).
+	ShouldReplan(goal domain.Goal, signalKind string, payload map[string]any, current []domain.RankedMove) (proceed bool, reason string)
+}
+
+// GateResolver selects the ReplanGate for a goal's domain, mirroring
+// EvaluatorResolver. The wiring layer builds it from pack/policy config and injects
+// it via WithGateResolver; when absent every signal proceeds to regeneration.
+type GateResolver interface {
+	GateFor(domainKey string) ReplanGate
+}

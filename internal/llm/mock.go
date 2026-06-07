@@ -73,6 +73,7 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 	moves := []domain.RankedMove{
 		{
 			Rank:           1,
+			Key:            "double-down:" + asset,
 			Title:          "Double down on " + asset,
 			Description:    fmt.Sprintf("Concentrate effort and resources on %s to make measurable progress toward: %s.", asset, g.Objective),
 			Confidence:     round2(base),
@@ -96,6 +97,7 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 		},
 		{
 			Rank:           2,
+			Key:            "neutralise:" + constraint,
 			Title:          "Neutralise " + constraint,
 			Description:    fmt.Sprintf("Reduce or remove the limiting effect of %s so that higher-impact moves become viable.", constraint),
 			Confidence:     round2(base - 0.12),
@@ -119,6 +121,7 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 		},
 		{
 			Rank:           3,
+			Key:            "validation-experiment",
 			Title:          "Run a low-cost validation experiment",
 			Description:    fmt.Sprintf("Test the riskiest assumption behind %q with a small, time-boxed experiment before committing further.", g.Objective),
 			Confidence:     round2(base - 0.22),

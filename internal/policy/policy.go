@@ -23,6 +23,10 @@ import (
 type DomainPolicy struct {
 	ConfidenceDelta *float64               `json:"confidence_delta,omitempty" yaml:"confidence_delta"`
 	Scoring         *finance.ScoringConfig `json:"scoring,omitempty" yaml:"scoring"`
+	// IgnoreSignalKinds, when non-nil, replaces the pack's list of signal kinds the
+	// domain never replans on. A nil pointer leaves the pack default; an explicit
+	// empty list means "replan on every kind".
+	IgnoreSignalKinds *[]string `json:"ignore_signal_kinds,omitempty" yaml:"ignore_signal_kinds"`
 }
 
 // Policy is the full set of per-domain overrides, keyed by domain id.

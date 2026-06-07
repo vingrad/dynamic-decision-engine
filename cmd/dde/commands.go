@@ -128,7 +128,10 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		FinanceCache: financeCache,
 		CacheObs:     cacheObs,
 	})
-	return engine.New(router, engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol))), nil
+	return engine.New(router,
+		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
+		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
+	), nil
 }
 
 // newServeCommand runs the REST API server.

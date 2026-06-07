@@ -189,6 +189,7 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 	stopPct := lossFrac * 100
 
 	move := domain.RankedMove{
+		Key:            "thesis:" + ticker,
 		Title:          "Thesis: " + ticker,
 		Description:    fmt.Sprintf("Position in %s sized to the risk budget; entry on confirmation, exit on thesis invalidation.", ticker),
 		Confidence:     clampConfidence(confidence),
@@ -282,6 +283,7 @@ func signalWindow(sig *finance.MarketSignal) int {
 
 func insufficientDataMove(g domain.Goal) domain.RankedMove {
 	return domain.RankedMove{
+		Key:            "insufficient-market-data",
 		Title:          "Insufficient market data",
 		Description:    fmt.Sprintf("No tickers were provided for %q, so no thesis could be scored.", g.Objective),
 		Confidence:     0.2,

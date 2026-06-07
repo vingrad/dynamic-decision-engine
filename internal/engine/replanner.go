@@ -26,7 +26,15 @@ type ReplanResult struct {
 // change is material. The current plan version is never mutated — when the change
 // is material a new version (N+1) is produced for the caller to persist.
 func (e *Engine) Replan(ctx context.Context, goal domain.Goal, current domain.PlanVersion, signalNote, signalKind string, signalPayload map[string]any) (ReplanResult, error) {
-	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote, SignalKind: signalKind, SignalPayload: signalPayload})
+	// Cheap pre-filter: skip regeneration entirely for signals a domain never acts
+	// on, so trivial signals don't pay for a full (LLM) plan generation.
+	if gate := e.gateFor(goal); gate != nil {
+		if proceed, reason := gate.ShouldReplan(goal, signalKind, signalPayload, current.RankedMoves); !proceed {
+			return ReplanResult{Material: false, Reason: reason}, nil
+		}
+	}
+
+	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote, SignalKind: signalKind, SignalPayload: signalPayload, CurrentMoves: current.RankedMoves})
 	if err != nil {
 		return ReplanResult{}, fmt.Errorf("engine: replan: %w", err)
 	}

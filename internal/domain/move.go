@@ -5,7 +5,11 @@ package domain
 // needs to judge it: confidence, expected impact, effort, risk and rationale,
 // plus a first experiment and fallback options.
 type RankedMove struct {
-	Rank           int        `json:"rank"`
+	Rank int `json:"rank"`
+	// Key is a stable, semantic identifier for the move that survives rewording of
+	// the display Title. Materiality is judged on Key (falling back to a normalised
+	// Title when empty), so re-phrasing a move does not read as a changed plan.
+	Key            string     `json:"key,omitempty"`
 	Title          string     `json:"title"`
 	Description    string     `json:"description"`
 	Confidence     float64    `json:"confidence"` // 0.0 - 1.0
