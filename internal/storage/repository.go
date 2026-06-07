@@ -114,4 +114,11 @@ type Repository interface {
 	OutcomeStore
 	Pinger
 	Closer
+
+	// Tx runs fn against a transactional Repository: every write fn performs through
+	// the passed Repository commits atomically, or rolls back together if fn returns
+	// an error. This lets a multi-write use-case (e.g. creating a plan head plus its
+	// first version) be all-or-nothing. Implementations join an outer Tx rather than
+	// nesting, so calls are safe to compose.
+	Tx(ctx context.Context, fn func(tx Repository) error) error
 }

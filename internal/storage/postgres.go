@@ -15,11 +15,24 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
 
+// querier is the subset of pgx shared by *pgxpool.Pool and pgx.Tx. Reads and
+// writes go through it so the same methods run on the pool or inside a transaction.
+type querier interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 // PostgresRepository is a pgx/pgxpool-backed Repository. It uses real
 // transactions for plan-version creation so that appending an immutable version
 // and advancing the plan's current_version pointer happen atomically.
+//
+// db is the active querier: the pool for non-transactional calls, or a pgx.Tx
+// while inside Tx. pool is retained for Begin/Ping/Close, which the querier
+// abstraction does not cover.
 type PostgresRepository struct {
 	pool *pgxpool.Pool
+	db   querier
 	log  *slog.Logger
 }
 
@@ -46,7 +59,35 @@ func NewPostgres(ctx context.Context, opts Options, log *slog.Logger) (*Postgres
 		pool.Close()
 		return nil, err
 	}
-	return &PostgresRepository{pool: pool, log: log}, nil
+	return &PostgresRepository{pool: pool, db: pool, log: log}, nil
+}
+
+// inTx runs fn on a transaction. When this repository is already transactional
+// (db is a pgx.Tx), it joins that transaction — no nested Begin, no premature
+// Commit — so callers compose safely. Otherwise it opens, commits, or rolls back
+// its own transaction. The fn error is returned verbatim (not mapped) so service
+// sentinels and ErrConflict propagate unchanged.
+func (r *PostgresRepository) inTx(ctx context.Context, fn func(querier) error) error {
+	if tx, ok := r.db.(pgx.Tx); ok {
+		return fn(tx)
+	}
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return mapError(err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
+	if err := fn(tx); err != nil {
+		return err
+	}
+	return mapError(tx.Commit(ctx))
+}
+
+// Tx implements Repository: it runs fn against a transactional repository whose
+// writes commit atomically or roll back together on error.
+func (r *PostgresRepository) Tx(ctx context.Context, fn func(tx Repository) error) error {
+	return r.inTx(ctx, func(q querier) error {
+		return fn(&PostgresRepository{pool: r.pool, db: q, log: r.log})
+	})
 }
 
 // Players ---------------------------------------------------------------------
@@ -56,7 +97,7 @@ func (r *PostgresRepository) CreatePlayer(ctx context.Context, p *domain.Player)
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO players (id, kind, name, metadata, created_at)
 		VALUES ($1, $2, $3, $4, $5)`,
 		p.ID, string(p.Kind), p.Name, md, p.CreatedAt)
@@ -67,7 +108,7 @@ func (r *PostgresRepository) GetPlayer(ctx context.Context, id string) (domain.P
 	var p domain.Player
 	var kind string
 	var md []byte
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT id, kind, name, metadata, created_at FROM players WHERE id = $1`, id).
 		Scan(&p.ID, &kind, &p.Name, &md, &p.CreatedAt)
 	if err != nil {
@@ -91,7 +132,7 @@ func (r *PostgresRepository) CreateGoal(ctx context.Context, g *domain.Goal) err
 	if g.PlayerID != "" {
 		playerID = g.PlayerID
 	}
-	_, err = r.pool.Exec(ctx, `
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO goals (id, player_id, domain, objective, metric, target, context, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
 		g.ID, playerID, g.Domain, g.Objective, g.Metric, g.Target, cx, g.CreatedAt)
@@ -99,14 +140,14 @@ func (r *PostgresRepository) CreateGoal(ctx context.Context, g *domain.Goal) err
 }
 
 func (r *PostgresRepository) GetGoal(ctx context.Context, id string) (domain.Goal, error) {
-	return r.scanGoal(r.pool.QueryRow(ctx, `
+	return r.scanGoal(r.db.QueryRow(ctx, `
 		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
 		FROM goals WHERE id = $1`, id))
 }
 
 func (r *PostgresRepository) ListGoals(ctx context.Context, page Page) ([]domain.Goal, error) {
 	page = page.Normalize()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
 		FROM goals ORDER BY created_at DESC, id LIMIT $1 OFFSET $2`, page.Limit, page.Offset)
 	if err != nil {
@@ -145,7 +186,7 @@ func (r *PostgresRepository) scanGoal(row rowScanner) (domain.Goal, error) {
 // Plans -----------------------------------------------------------------------
 
 func (r *PostgresRepository) CreatePlan(ctx context.Context, p *domain.Plan) error {
-	_, err := r.pool.Exec(ctx, `
+	_, err := r.db.Exec(ctx, `
 		INSERT INTO plan (id, goal_id, current_version, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5)`,
 		p.ID, p.GoalID, p.CurrentVersion, p.CreatedAt, p.UpdatedAt)
@@ -153,12 +194,12 @@ func (r *PostgresRepository) CreatePlan(ctx context.Context, p *domain.Plan) err
 }
 
 func (r *PostgresRepository) GetPlan(ctx context.Context, id string) (domain.Plan, error) {
-	return r.scanPlan(r.pool.QueryRow(ctx, `
+	return r.scanPlan(r.db.QueryRow(ctx, `
 		SELECT id, goal_id, current_version, created_at, updated_at FROM plan WHERE id = $1`, id))
 }
 
 func (r *PostgresRepository) GetPlanByGoal(ctx context.Context, goalID string) (domain.Plan, error) {
-	return r.scanPlan(r.pool.QueryRow(ctx, `
+	return r.scanPlan(r.db.QueryRow(ctx, `
 		SELECT id, goal_id, current_version, created_at, updated_at FROM plan WHERE goal_id = $1`, goalID))
 }
 
@@ -182,36 +223,34 @@ func (r *PostgresRepository) CreatePlanVersion(ctx context.Context, v *domain.Pl
 		return err
 	}
 
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return mapError(err)
-	}
-	defer tx.Rollback(ctx) //nolint:errcheck // no-op after commit
-
-	if _, err := tx.Exec(ctx, `
-		INSERT INTO plan_version
-			(plan_id, version, goal, summary, ranked_moves, provenance, input_snapshot_id, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		v.PlanID, v.Version, v.Goal, v.Summary, moves, prov, v.InputSnapshotID, v.CreatedAt); err != nil {
-		return mapError(err)
-	}
-	if _, err := tx.Exec(ctx, `
-		UPDATE plan SET current_version = $2, updated_at = $3
-		WHERE id = $1 AND current_version < $2`,
-		v.PlanID, v.Version, v.CreatedAt); err != nil {
-		return mapError(err)
-	}
-	return mapError(tx.Commit(ctx))
+	// inTx makes the two statements atomic standalone, and joins an outer Tx when
+	// CreatePlanVersion is called inside one (e.g. plan-head + first version).
+	return r.inTx(ctx, func(q querier) error {
+		if _, err := q.Exec(ctx, `
+			INSERT INTO plan_version
+				(plan_id, version, goal, summary, ranked_moves, provenance, input_snapshot_id, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+			v.PlanID, v.Version, v.Goal, v.Summary, moves, prov, v.InputSnapshotID, v.CreatedAt); err != nil {
+			return mapError(err)
+		}
+		if _, err := q.Exec(ctx, `
+			UPDATE plan SET current_version = $2, updated_at = $3
+			WHERE id = $1 AND current_version < $2`,
+			v.PlanID, v.Version, v.CreatedAt); err != nil {
+			return mapError(err)
+		}
+		return nil
+	})
 }
 
 func (r *PostgresRepository) GetPlanVersion(ctx context.Context, planID string, version int) (domain.PlanVersion, error) {
-	return r.scanVersion(r.pool.QueryRow(ctx, `
+	return r.scanVersion(r.db.QueryRow(ctx, `
 		SELECT plan_id, version, goal, summary, ranked_moves, provenance, input_snapshot_id, created_at
 		FROM plan_version WHERE plan_id = $1 AND version = $2`, planID, version))
 }
 
 func (r *PostgresRepository) GetCurrentPlanVersion(ctx context.Context, planID string) (domain.PlanVersion, error) {
-	return r.scanVersion(r.pool.QueryRow(ctx, `
+	return r.scanVersion(r.db.QueryRow(ctx, `
 		SELECT pv.plan_id, pv.version, pv.goal, pv.summary, pv.ranked_moves, pv.provenance, pv.input_snapshot_id, pv.created_at
 		FROM plan_version pv
 		JOIN plan p ON p.id = pv.plan_id AND p.current_version = pv.version
@@ -220,7 +259,7 @@ func (r *PostgresRepository) GetCurrentPlanVersion(ctx context.Context, planID s
 
 func (r *PostgresRepository) ListPlanVersions(ctx context.Context, planID string, page Page) ([]domain.PlanVersion, error) {
 	page = page.Normalize()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT plan_id, version, goal, summary, ranked_moves, provenance, input_snapshot_id, created_at
 		FROM plan_version WHERE plan_id = $1 ORDER BY version ASC LIMIT $2 OFFSET $3`,
 		planID, page.Limit, page.Offset)
@@ -262,7 +301,7 @@ func (r *PostgresRepository) CreateSignal(ctx context.Context, s *domain.Signal)
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO signal (id, goal_id, kind, description, payload, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6)`,
 		s.ID, s.GoalID, s.Kind, s.Description, payload, s.CreatedAt)
@@ -271,7 +310,7 @@ func (r *PostgresRepository) CreateSignal(ctx context.Context, s *domain.Signal)
 
 func (r *PostgresRepository) ListSignals(ctx context.Context, goalID string, page Page) ([]domain.Signal, error) {
 	page = page.Normalize()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT id, goal_id, kind, description, payload, created_at
 		FROM signal WHERE goal_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3`,
 		goalID, page.Limit, page.Offset)
@@ -299,7 +338,7 @@ func (r *PostgresRepository) ListPendingSignals(ctx context.Context, limit int) 
 	if limit <= 0 {
 		return nil, nil
 	}
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT id, goal_id, kind, description, payload, created_at,
 		       status, COALESCE(reason, ''), COALESCE(result_version, 0), COALESCE(error, ''), processed_at
 		FROM signal WHERE status = 'pending' ORDER BY created_at ASC, id LIMIT $1`, limit)
@@ -330,7 +369,7 @@ func (r *PostgresRepository) GetSignal(ctx context.Context, id string) (domain.S
 	var s domain.Signal
 	var payload []byte
 	var processed *time.Time
-	err := r.pool.QueryRow(ctx, `
+	err := r.db.QueryRow(ctx, `
 		SELECT id, goal_id, kind, description, payload, created_at,
 		       COALESCE(status, 'pending'), COALESCE(reason, ''), COALESCE(result_version, 0), COALESCE(error, ''), processed_at
 		FROM signal WHERE id = $1`, id).Scan(
@@ -347,7 +386,7 @@ func (r *PostgresRepository) GetSignal(ctx context.Context, id string) (domain.S
 }
 
 func (r *PostgresRepository) MarkSignalProcessed(ctx context.Context, id, status string, resultVersion int, reason, errMsg string, at time.Time) error {
-	ct, err := r.pool.Exec(ctx, `
+	ct, err := r.db.Exec(ctx, `
 		UPDATE signal SET status = $2, result_version = $3, reason = $4, error = $5, processed_at = $6
 		WHERE id = $1`,
 		id, status, resultVersion, reason, errMsg, at)
@@ -367,7 +406,7 @@ func (r *PostgresRepository) CreateOutcome(ctx context.Context, o *domain.Outcom
 	if err != nil {
 		return err
 	}
-	_, err = r.pool.Exec(ctx, `
+	_, err = r.db.Exec(ctx, `
 		INSERT INTO outcome (id, goal_id, plan_version, move_rank, move_title, result, observed_signals, notes, created_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
 		o.ID, o.GoalID, o.PlanVersion, o.MoveRank, o.MoveTitle, string(o.Result), observed, o.Notes, o.CreatedAt)
@@ -376,7 +415,7 @@ func (r *PostgresRepository) CreateOutcome(ctx context.Context, o *domain.Outcom
 
 func (r *PostgresRepository) ListOutcomes(ctx context.Context, goalID string, page Page) ([]domain.Outcome, error) {
 	page = page.Normalize()
-	rows, err := r.pool.Query(ctx, `
+	rows, err := r.db.Query(ctx, `
 		SELECT id, goal_id, plan_version, move_rank, move_title, result, observed_signals, notes, created_at
 		FROM outcome WHERE goal_id = $1 ORDER BY created_at DESC, id LIMIT $2 OFFSET $3`,
 		goalID, page.Limit, page.Offset)

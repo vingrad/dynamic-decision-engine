@@ -39,6 +39,75 @@ func NewMemory() *MemoryRepository {
 	}
 }
 
+// Tx runs fn against a staged copy of the store and adopts it only if fn succeeds,
+// so a failing multi-write use-case leaves the store unchanged. The whole tx holds
+// the write lock (serialising it against other access); fn operates on a separate
+// repository with its own lock, so calling its methods does not re-enter m.mu.
+func (m *MemoryRepository) Tx(_ context.Context, fn func(tx Repository) error) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	staged := m.snapshotLocked()
+	if err := fn(staged); err != nil {
+		return err // discard staged: rollback
+	}
+	m.adoptLocked(staged)
+	return nil
+}
+
+// snapshotLocked returns a deep copy of the store as a standalone repository. Every
+// container is copied — including the inner per-plan version maps and the signal
+// and outcome slices — so mutations on the snapshot cannot reach m before adoption.
+func (m *MemoryRepository) snapshotLocked() *MemoryRepository {
+	s := &MemoryRepository{
+		players:  make(map[string]domain.Player, len(m.players)),
+		goals:    make(map[string]domain.Goal, len(m.goals)),
+		plans:    make(map[string]domain.Plan, len(m.plans)),
+		byGoal:   make(map[string]string, len(m.byGoal)),
+		versions: make(map[string]map[int]domain.PlanVersion, len(m.versions)),
+	}
+	for k, v := range m.players {
+		s.players[k] = clonePlayer(v)
+	}
+	for k, v := range m.goals {
+		s.goals[k] = cloneGoal(v)
+	}
+	for k, v := range m.plans {
+		s.plans[k] = v
+	}
+	for k, v := range m.byGoal {
+		s.byGoal[k] = v
+	}
+	for planID, vers := range m.versions {
+		inner := make(map[int]domain.PlanVersion, len(vers))
+		for ver, pv := range vers {
+			inner[ver] = clonePlanVersion(pv)
+		}
+		s.versions[planID] = inner
+	}
+	s.signals = make([]domain.Signal, len(m.signals))
+	for i := range m.signals {
+		s.signals[i] = cloneSignal(m.signals[i])
+	}
+	s.outcomes = make([]domain.Outcome, len(m.outcomes))
+	for i := range m.outcomes {
+		s.outcomes[i] = cloneOutcome(m.outcomes[i])
+	}
+	return s
+}
+
+// adoptLocked replaces m's containers with the staged copy's (commit). Safe to take
+// them wholesale: m.mu is held for the whole tx, so no concurrent writer exists.
+func (m *MemoryRepository) adoptLocked(s *MemoryRepository) {
+	m.players = s.players
+	m.goals = s.goals
+	m.plans = s.plans
+	m.byGoal = s.byGoal
+	m.versions = s.versions
+	m.signals = s.signals
+	m.outcomes = s.outcomes
+}
+
 // Players ---------------------------------------------------------------------
 
 func (m *MemoryRepository) CreatePlayer(_ context.Context, p *domain.Player) error {

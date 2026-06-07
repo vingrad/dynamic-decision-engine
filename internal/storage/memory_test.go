@@ -49,6 +49,84 @@ func TestMemoryGoalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMemoryTxCommit(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+	if err := repo.CreateGoal(ctx, newGoal("goal_tx")); err != nil {
+		t.Fatal(err)
+	}
+
+	err := repo.Tx(ctx, func(tx Repository) error {
+		if err := tx.CreatePlan(ctx, &domain.Plan{ID: "plan_tx", GoalID: "goal_tx", CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
+		return tx.CreatePlanVersion(ctx, newVersion("plan_tx", 1))
+	})
+	if err != nil {
+		t.Fatalf("tx commit: %v", err)
+	}
+
+	if _, err := repo.GetPlanByGoal(ctx, "goal_tx"); err != nil {
+		t.Errorf("plan head should be committed: %v", err)
+	}
+	if v, err := repo.GetCurrentPlanVersion(ctx, "plan_tx"); err != nil || v.Version != 1 {
+		t.Errorf("version should be committed: v=%d err=%v", v.Version, err)
+	}
+}
+
+func TestMemoryTxRollback(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+	// A goal created before the tx must survive a rollback untouched.
+	if err := repo.CreateGoal(ctx, newGoal("goal_keep")); err != nil {
+		t.Fatal(err)
+	}
+
+	sentinel := errors.New("boom")
+	err := repo.Tx(ctx, func(tx Repository) error {
+		if err := tx.CreatePlan(ctx, &domain.Plan{ID: "plan_rb", GoalID: "goal_keep", CreatedAt: time.Now().UTC()}); err != nil {
+			return err
+		}
+		return sentinel // abort after a successful write
+	})
+	if !errors.Is(err, sentinel) {
+		t.Fatalf("expected sentinel, got %v", err)
+	}
+
+	// The plan head written inside the tx must NOT be persisted.
+	if _, err := repo.GetPlanByGoal(ctx, "goal_keep"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("rolled-back plan head should be absent, got %v", err)
+	}
+	// The pre-existing goal is untouched.
+	if _, err := repo.GetGoal(ctx, "goal_keep"); err != nil {
+		t.Errorf("pre-existing goal should survive rollback: %v", err)
+	}
+}
+
+// TestMemoryTxRollbackVersionsAliasing guards the inner-map copy: a rolled-back
+// version append must not mutate the live per-plan version map.
+func TestMemoryTxRollbackVersionsAliasing(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+	if err := repo.CreatePlan(ctx, &domain.Plan{ID: "plan_a", GoalID: "g", CreatedAt: time.Now().UTC()}); err != nil {
+		t.Fatal(err)
+	}
+	if err := repo.CreatePlanVersion(ctx, newVersion("plan_a", 1)); err != nil {
+		t.Fatal(err)
+	}
+
+	_ = repo.Tx(ctx, func(tx Repository) error {
+		if err := tx.CreatePlanVersion(ctx, newVersion("plan_a", 2)); err != nil {
+			return err
+		}
+		return errors.New("rollback")
+	})
+
+	if v, err := repo.GetCurrentPlanVersion(ctx, "plan_a"); err != nil || v.Version != 1 {
+		t.Errorf("rolled-back version 2 leaked into live store: v=%d err=%v", v.Version, err)
+	}
+}
+
 func TestMemoryOutcomeRoundTrip(t *testing.T) {
 	repo := NewMemory()
 	ctx := context.Background()
