@@ -62,6 +62,15 @@ func TestFinancePlannerScoresAndRanks(t *testing.T) {
 	if !strings.Contains(res.Summary, "Not financial advice") {
 		t.Errorf("summary must carry the disclaimer: %q", res.Summary)
 	}
+	// Theses are independent positions: same parallel group, no dependencies.
+	for _, m := range res.RankedMoves {
+		if m.ParallelGroup != "portfolio" {
+			t.Errorf("thesis %q parallel group = %q, want %q", m.Key, m.ParallelGroup, "portfolio")
+		}
+		if len(m.DependsOn) != 0 {
+			t.Errorf("thesis %q should have no dependencies, got %v", m.Key, m.DependsOn)
+		}
+	}
 }
 
 func TestFinancePlannerDeterministic(t *testing.T) {

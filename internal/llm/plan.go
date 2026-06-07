@@ -35,6 +35,14 @@ reuse a move's existing key whenever your move is the same underlying action,
 even if you reword its title; mint a new key only for a genuinely new move. The
 key is identity; the title is display.
 
+Express how moves relate in execution. Use "depends_on" to list the keys of moves
+that must finish before a move can start; only reference keys you also emit, and
+never create a cycle — the moves must form a directed acyclic graph. Leave
+"depends_on" empty for moves that can start immediately. Dependencies are about
+ordering, not priority: a strongly ranked move may still depend on a weaker one.
+Optionally label moves meant to run together with the same "parallel_group" (a
+short tag like "discover" or "commit"); it is a grouping hint only.
+
 Return your answer by calling the submit_plan tool — do not write prose outside
 the tool call.`
 
@@ -57,6 +65,8 @@ type moveDTO struct {
 	Rationale      string        `json:"rationale"`
 	Experiment     experimentDTO `json:"experiment"`
 	FallbackMoves  []string      `json:"fallback_moves"`
+	DependsOn      []string      `json:"depends_on"`
+	ParallelGroup  string        `json:"parallel_group"`
 }
 
 type experimentDTO struct {
@@ -121,6 +131,8 @@ func mapMoves(dto planDTO) []domain.RankedMove {
 				KillCriteria:   m.Experiment.KillCriteria,
 			},
 			FallbackMoves: m.FallbackMoves,
+			DependsOn:     m.DependsOn,
+			ParallelGroup: m.ParallelGroup,
 		}
 	}
 	return moves
@@ -203,6 +215,8 @@ func planSchema() (properties map[string]any, required []string) {
 						"required": []string{"title", "duration_days", "success_signals", "kill_criteria"},
 					},
 					"fallback_moves": strArray,
+					"depends_on":     strArray,
+					"parallel_group": map[string]any{"type": "string"},
 				},
 				"required": []string{"title", "description", "confidence", "expected_impact", "effort", "risk", "rationale", "experiment"},
 			},

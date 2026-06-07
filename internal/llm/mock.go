@@ -94,6 +94,10 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 				},
 			},
 			FallbackMoves: []string{"Reallocate effort to the second-strongest asset"},
+			// Commit only after the cheap validation and the constraint work land,
+			// so the top recommendation is the join point of the parallel front.
+			DependsOn:     []string{"validation-experiment", "neutralise:" + constraint},
+			ParallelGroup: "commit",
 		},
 		{
 			Rank:           2,
@@ -118,6 +122,8 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 				},
 			},
 			FallbackMoves: []string{"Design the plan to work within " + constraint + " instead of removing it"},
+			// Independent of the validation experiment: the two can run concurrently.
+			ParallelGroup: "discover",
 		},
 		{
 			Rank:           3,
@@ -142,6 +148,8 @@ func (*MockPlanner) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult
 				},
 			},
 			FallbackMoves: []string{"Escalate to a slightly larger experiment if the first is inconclusive"},
+			// No prerequisites: runs immediately, in parallel with the constraint work.
+			ParallelGroup: "discover",
 		},
 	}
 

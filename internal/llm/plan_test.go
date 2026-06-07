@@ -54,3 +54,28 @@ func TestMapMovesFillsKeyFromSlugWhenAbsent(t *testing.T) {
 		t.Errorf("expected explicit key preserved, got %q", moves[1].Key)
 	}
 }
+
+func TestMapMovesCopiesDependencyFields(t *testing.T) {
+	dto := planDTO{RankedMoves: []moveDTO{
+		{Key: "validate", Title: "Validate", ParallelGroup: "discover"},
+		{Key: "commit", Title: "Commit", DependsOn: []string{"validate"}, ParallelGroup: "commit"},
+	}}
+	moves := mapMoves(dto)
+	if moves[0].ParallelGroup != "discover" {
+		t.Errorf("parallel_group not mapped, got %q", moves[0].ParallelGroup)
+	}
+	if len(moves[1].DependsOn) != 1 || moves[1].DependsOn[0] != "validate" {
+		t.Errorf("depends_on not mapped, got %v", moves[1].DependsOn)
+	}
+}
+
+func TestPlanSchemaExposesDependencyFields(t *testing.T) {
+	props, _ := planSchema()
+	items := props["ranked_moves"].(map[string]any)["items"].(map[string]any)
+	moveProps := items["properties"].(map[string]any)
+	for _, field := range []string{"depends_on", "parallel_group"} {
+		if _, ok := moveProps[field]; !ok {
+			t.Errorf("plan schema missing move field %q", field)
+		}
+	}
+}

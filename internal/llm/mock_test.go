@@ -78,6 +78,33 @@ func TestMockPlannerShape(t *testing.T) {
 		t.Error("confidence should decrease with rank")
 	}
 
+	// The dependency graph must be well-formed: no dangling refs, no cycles.
+	if issues := domain.MoveGraphIssues(res.RankedMoves); len(issues) != 0 {
+		t.Errorf("mock plan has move-graph issues: %v", issues)
+	}
+	keys := map[string]bool{}
+	for _, m := range res.RankedMoves {
+		keys[m.Key] = true
+	}
+	depCount, groupCount := 0, 0
+	for _, m := range res.RankedMoves {
+		if m.ParallelGroup != "" {
+			groupCount++
+		}
+		for _, dep := range m.DependsOn {
+			depCount++
+			if !keys[dep] {
+				t.Errorf("move %q depends on unknown key %q", m.Key, dep)
+			}
+		}
+	}
+	if depCount == 0 {
+		t.Error("expected the mock plan to declare at least one dependency")
+	}
+	if groupCount == 0 {
+		t.Error("expected the mock plan to set parallel groups")
+	}
+
 	if res.Provenance.Planner != "mock" || res.Provenance.PromptVersion != mockPromptVersion {
 		t.Errorf("unexpected provenance: %+v", res.Provenance)
 	}
