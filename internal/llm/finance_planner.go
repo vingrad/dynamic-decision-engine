@@ -211,6 +211,9 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 			},
 		},
 		FallbackMoves: []string{"Reduce to a half-size starter", "Wait for a better entry"},
+		// Each thesis is an independent position; theses carry no inter-dependencies
+		// and can all be pursued concurrently within the portfolio.
+		ParallelGroup: "portfolio",
 	}
 
 	// A thesis-break invalidates the thesis: encode it so the standard materiality

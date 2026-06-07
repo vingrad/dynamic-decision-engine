@@ -19,4 +19,15 @@ type RankedMove struct {
 	Rationale      string     `json:"rationale"`
 	Experiment     Experiment `json:"experiment"`
 	FallbackMoves  []string   `json:"fallback_moves"`
+	// DependsOn lists the Keys of moves in the SAME plan version that must
+	// complete before this move can start. The moves of a version form a DAG (no
+	// cycles); SanitizeMoveGraph enforces this. DependsOn is the authoritative
+	// ordering constraint — an orchestrator derives the concurrently-runnable set
+	// from it (moves whose dependencies are all satisfied). It is independent of
+	// Rank: rank is the strength of the recommendation, not the execution order.
+	DependsOn []string `json:"depends_on,omitempty"`
+	// ParallelGroup is an optional display/grouping hint labelling moves intended
+	// to run together (e.g. "core", "validate"). It is advisory only; DependsOn is
+	// the source of truth for ordering.
+	ParallelGroup string `json:"parallel_group,omitempty"`
 }

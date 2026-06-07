@@ -44,6 +44,12 @@ func (t ThresholdEvaluator) IsMaterial(current, candidate []domain.RankedMove) (
 	if delta >= t.confidenceDelta() {
 		return true, "confidence on the top move shifted materially"
 	}
+
+	// Same moves in the same order can still be a different action path if their
+	// execution structure changed — the dependency graph or the parallel grouping.
+	if changed, reason := structureChange(current, candidate); changed {
+		return true, reason
+	}
 	return false, "no material change in the recommended action path"
 }
 
@@ -66,6 +72,51 @@ func sameOrder(a, b []domain.RankedMove) bool {
 		}
 	}
 	return true
+}
+
+// structureChange reports whether the execution structure of the moves differs
+// between two plans, comparing moves by stable key. It is only meaningful once the
+// caller has established the moves and their order match (so keys line up). It
+// detects a changed dependency graph or a changed parallel grouping and returns a
+// specific, audit-friendly reason.
+func structureChange(current, candidate []domain.RankedMove) (bool, string) {
+	cand := make(map[string]domain.RankedMove, len(candidate))
+	for _, m := range candidate {
+		cand[moveKey(m)] = m
+	}
+	for _, c := range current {
+		n, ok := cand[moveKey(c)]
+		if !ok {
+			continue // move set differences are handled by the order check
+		}
+		if !sameStringSet(c.DependsOn, n.DependsOn) {
+			return true, "execution dependencies changed"
+		}
+		if c.ParallelGroup != n.ParallelGroup {
+			return true, "parallel grouping changed"
+		}
+	}
+	return false, ""
+}
+
+// sameStringSet reports whether two string slices contain the same elements,
+// ignoring order and duplicates. Used to compare dependency lists where the order
+// of declaration carries no meaning.
+func sameStringSet(a, b []string) bool {
+	if len(a) == 0 && len(b) == 0 {
+		return true
+	}
+	set := make(map[string]struct{}, len(a))
+	for _, s := range a {
+		set[s] = struct{}{}
+	}
+	for _, s := range b {
+		if _, ok := set[s]; !ok {
+			return false
+		}
+		delete(set, s)
+	}
+	return len(set) == 0
 }
 
 // moveKey returns a move's stable identity for materiality comparison: its

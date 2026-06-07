@@ -58,6 +58,39 @@ Return the plan head and its current version:
 ### `GET /v1/plans/{id}/versions`
 List immutable plan versions in ascending order: `{ "versions": [ ... ] }`.
 
+### Ranked move shape
+Each entry in a version's `ranked_moves` carries decision-support metadata and its
+place in the execution graph:
+
+```json
+{
+  "rank": 1,
+  "key": "double-down:founder-network",
+  "title": "Double down on founder network",
+  "description": "...",
+  "confidence": 0.78,
+  "expected_impact": "high",
+  "effort": "medium",
+  "risk": "low",
+  "rationale": "...",
+  "experiment": { "title": "...", "duration_days": 7, "success_signals": ["..."], "kill_criteria": ["..."] },
+  "fallback_moves": ["..."],
+  "depends_on": ["validation-experiment", "neutralise:small-team"],
+  "parallel_group": "commit"
+}
+```
+
+- `depends_on` — keys of moves in the **same version** that must complete before
+  this move can start. The moves form a DAG; the engine drops references to
+  unknown keys and breaks cycles, so a returned plan is always acyclic. Ordering,
+  not priority: a top-ranked move may still depend on a lower-ranked one. Omitted
+  when empty.
+- `parallel_group` — optional label for moves intended to run together; advisory
+  only (`depends_on` governs ordering). Omitted when empty.
+
+A change to either field between versions is treated as a material change and
+produces a new version.
+
 ## Signals
 
 ### `POST /v1/signals`

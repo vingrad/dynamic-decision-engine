@@ -42,6 +42,7 @@ func clonePlanVersion(v domain.PlanVersion) domain.PlanVersion {
 		moves := make([]domain.RankedMove, len(v.RankedMoves))
 		for i, mv := range v.RankedMoves {
 			mv.FallbackMoves = cloneStrings(mv.FallbackMoves)
+			mv.DependsOn = cloneStrings(mv.DependsOn)
 			mv.Experiment.SuccessSignals = cloneStrings(mv.Experiment.SuccessSignals)
 			mv.Experiment.KillCriteria = cloneStrings(mv.Experiment.KillCriteria)
 			moves[i] = mv

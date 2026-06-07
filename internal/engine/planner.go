@@ -97,14 +97,17 @@ func (e *Engine) gateFor(goal domain.Goal) ReplanGate {
 	return e.gateResolver.GateFor(goal.Domain)
 }
 
-// buildVersion assembles an immutable PlanVersion from a planner result.
+// buildVersion assembles an immutable PlanVersion from a planner result. It is the
+// single chokepoint for both initial evaluation and replanning, so it normalises
+// the move dependency graph here — guaranteeing every persisted version holds a
+// valid DAG regardless of which planner produced it.
 func (e *Engine) buildVersion(planID string, version int, goal domain.Goal, res llm.PlanResult) domain.PlanVersion {
 	return domain.PlanVersion{
 		PlanID:          planID,
 		Version:         version,
 		Goal:            goal.Objective,
 		Summary:         res.Summary,
-		RankedMoves:     res.RankedMoves,
+		RankedMoves:     domain.SanitizeMoveGraph(res.RankedMoves),
 		Provenance:      res.Provenance,
 		InputSnapshotID: res.Provenance.InputSnapshotID,
 		CreatedAt:       e.clock(),
