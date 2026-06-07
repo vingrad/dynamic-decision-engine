@@ -49,6 +49,44 @@ func TestMemoryGoalRoundTrip(t *testing.T) {
 	}
 }
 
+func TestMemoryUpdateGoalStatus(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+	g := newGoal("goal_s")
+	g.Status = domain.GoalActive
+	if err := repo.CreateGoal(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+
+	at := time.Now().UTC().Truncate(time.Millisecond)
+	res := &domain.Resolution{Result: domain.OutcomeSuccess, Notes: "done", ResolvedAt: at}
+	if err := repo.UpdateGoalStatus(ctx, "goal_s", domain.GoalActive, domain.GoalResolved, res, at); err != nil {
+		t.Fatal(err)
+	}
+	// Mutating the caller's resolution must not affect stored state (deep copy).
+	res.Notes = "tampered"
+
+	got, err := repo.GetGoal(ctx, "goal_s")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.GoalResolved || got.UpdatedAt != at {
+		t.Fatalf("unexpected goal after update: %+v", got)
+	}
+	if got.Resolution == nil || got.Resolution.Notes != "done" {
+		t.Fatalf("resolution not stored/isolated: %+v", got.Resolution)
+	}
+
+	// Compare-and-swap: a stale expected status loses to the now-resolved goal.
+	if err := repo.UpdateGoalStatus(ctx, "goal_s", domain.GoalActive, domain.GoalAbandoned, nil, at); !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict on stale expected status, got %v", err)
+	}
+
+	if err := repo.UpdateGoalStatus(ctx, "missing", domain.GoalActive, domain.GoalOnHold, nil, at); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound, got %v", err)
+	}
+}
+
 func TestMemoryTxCommit(t *testing.T) {
 	repo := NewMemory()
 	ctx := context.Background()
@@ -214,12 +252,52 @@ func TestMemoryPagination(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	page, err := repo.ListGoals(ctx, Page{Limit: 2, Offset: 0})
+	page, err := repo.ListGoals(ctx, GoalFilter{}, Page{Limit: 2, Offset: 0})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(page) != 2 {
 		t.Errorf("expected 2 goals, got %d", len(page))
+	}
+}
+
+func TestMemoryListGoalsStatusFilter(t *testing.T) {
+	repo := NewMemory()
+	ctx := context.Background()
+	mk := func(id string, status domain.GoalStatus) {
+		g := newGoal(id)
+		g.Status = status
+		if err := repo.CreateGoal(ctx, g); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk("goal_a", domain.GoalActive)
+	mk("goal_b", domain.GoalActive)
+	mk("goal_c", domain.GoalResolved)
+	mk("goal_legacy", "") // pre-status row, treated as active
+
+	all, err := repo.ListGoals(ctx, GoalFilter{}, Page{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all) != 4 {
+		t.Fatalf("expected 4 goals unfiltered, got %d", len(all))
+	}
+
+	active, err := repo.ListGoals(ctx, GoalFilter{Status: domain.GoalActive}, Page{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(active) != 3 { // two active + the legacy row
+		t.Fatalf("expected 3 active goals, got %d", len(active))
+	}
+
+	resolved, err := repo.ListGoals(ctx, GoalFilter{Status: domain.GoalResolved}, Page{Limit: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(resolved) != 1 || resolved[0].ID != "goal_c" {
+		t.Fatalf("expected only goal_c resolved, got %+v", resolved)
 	}
 }
 

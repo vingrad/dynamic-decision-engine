@@ -19,6 +19,10 @@ func clonePlayer(p domain.Player) domain.Player {
 
 func cloneGoal(g domain.Goal) domain.Goal {
 	g.Context = cloneContext(g.Context)
+	if g.Resolution != nil {
+		r := *g.Resolution
+		g.Resolution = &r
+	}
 	return g
 }
 

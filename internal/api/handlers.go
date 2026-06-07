@@ -6,6 +6,8 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/app"
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
 // --- Operational -------------------------------------------------------------
@@ -58,12 +60,40 @@ func (s *Server) handleGetGoal(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleListGoals(w http.ResponseWriter, r *http.Request) {
-	goals, err := s.svc.ListGoals(r.Context(), parsePage(r))
+	var filter storage.GoalFilter
+	if raw := r.URL.Query().Get("status"); raw != "" {
+		status := domain.GoalStatus(raw)
+		if !status.Valid() {
+			writeError(w, http.StatusBadRequest, "status must be one of: active, on_hold, resolved, abandoned")
+			return
+		}
+		filter.Status = status
+	}
+	goals, err := s.svc.ListGoals(r.Context(), filter, parsePage(r))
 	if err != nil {
 		writeServiceError(w, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"goals": goals})
+}
+
+func (s *Server) handleUpdateGoalStatus(w http.ResponseWriter, r *http.Request) {
+	var req UpdateGoalStatusRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	goal, err := s.svc.UpdateGoalStatus(r.Context(), app.UpdateGoalStatusInput{
+		GoalID:           chi.URLParam(r, "id"),
+		Status:           req.Status,
+		ResolutionResult: req.ResolutionResult,
+		ResolutionNotes:  req.ResolutionNotes,
+	})
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, goal)
 }
 
 // --- Plans -------------------------------------------------------------------

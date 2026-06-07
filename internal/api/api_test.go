@@ -138,6 +138,104 @@ func TestGoalPlanSignalFlow(t *testing.T) {
 	}
 }
 
+func TestUpdateGoalStatusEndpoint(t *testing.T) {
+	h := newTestServer()
+
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{Objective: "ship v1"})
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create goal status %d: %s", rec.Code, rec.Body)
+	}
+	goal := decode[domain.Goal](t, rec.Body)
+	if goal.Status != domain.GoalActive {
+		t.Fatalf("expected active goal, got %q", goal.Status)
+	}
+
+	// Pause it.
+	rec = doJSON(t, h, http.MethodPatch, "/v1/goals/"+goal.ID+"/status", UpdateGoalStatusRequest{Status: domain.GoalOnHold})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("on_hold status %d: %s", rec.Code, rec.Body)
+	}
+	if got := decode[domain.Goal](t, rec.Body); got.Status != domain.GoalOnHold {
+		t.Fatalf("expected on_hold, got %q", got.Status)
+	}
+
+	// Resolve it with a resolution.
+	rec = doJSON(t, h, http.MethodPatch, "/v1/goals/"+goal.ID+"/status", UpdateGoalStatusRequest{
+		Status:           domain.GoalResolved,
+		ResolutionResult: domain.OutcomeSuccess,
+		ResolutionNotes:  "done",
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("resolve status %d: %s", rec.Code, rec.Body)
+	}
+	resolved := decode[domain.Goal](t, rec.Body)
+	if resolved.Status != domain.GoalResolved || resolved.Resolution == nil || resolved.Resolution.Result != domain.OutcomeSuccess {
+		t.Fatalf("unexpected resolved goal: %+v", resolved)
+	}
+
+	// A terminal goal cannot transition again -> 400.
+	rec = doJSON(t, h, http.MethodPatch, "/v1/goals/"+goal.ID+"/status", UpdateGoalStatusRequest{Status: domain.GoalActive})
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 transitioning out of terminal, got %d: %s", rec.Code, rec.Body)
+	}
+
+	// Unknown goal -> 404.
+	rec = doJSON(t, h, http.MethodPatch, "/v1/goals/goal_missing/status", UpdateGoalStatusRequest{Status: domain.GoalOnHold})
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown goal, got %d", rec.Code)
+	}
+}
+
+func TestNonActiveGoalSignalReturns409(t *testing.T) {
+	h := newTestServer()
+
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{Objective: "ship"})
+	goal := decode[domain.Goal](t, rec.Body)
+	if rec = doJSON(t, h, http.MethodPost, "/v1/goals/"+goal.ID+"/plans", nil); rec.Code != http.StatusCreated {
+		t.Fatalf("create plan: %d %s", rec.Code, rec.Body)
+	}
+
+	// Pause the goal, then a signal must be rejected with 409.
+	if rec = doJSON(t, h, http.MethodPatch, "/v1/goals/"+goal.ID+"/status", UpdateGoalStatusRequest{Status: domain.GoalOnHold}); rec.Code != http.StatusOK {
+		t.Fatalf("on_hold: %d %s", rec.Code, rec.Body)
+	}
+	rec = doJSON(t, h, http.MethodPost, "/v1/signals", CreateSignalRequest{GoalID: goal.ID, Kind: "noise"})
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("expected 409 for signal on non-active goal, got %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestListGoalsStatusFilterEndpoint(t *testing.T) {
+	h := newTestServer()
+
+	rec := doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{Objective: "keep active"})
+	_ = decode[domain.Goal](t, rec.Body)
+	rec = doJSON(t, h, http.MethodPost, "/v1/goals", CreateGoalRequest{Objective: "to resolve"})
+	resolveID := decode[domain.Goal](t, rec.Body).ID
+	if rec = doJSON(t, h, http.MethodPatch, "/v1/goals/"+resolveID+"/status", UpdateGoalStatusRequest{
+		Status: domain.GoalResolved, ResolutionResult: domain.OutcomeSuccess,
+	}); rec.Code != http.StatusOK {
+		t.Fatalf("resolve: %d %s", rec.Code, rec.Body)
+	}
+
+	type listResp struct {
+		Goals []domain.Goal `json:"goals"`
+	}
+	active := decode[listResp](t, doJSON(t, h, http.MethodGet, "/v1/goals?status=active", nil).Body)
+	if len(active.Goals) != 1 || active.Goals[0].Status != domain.GoalActive {
+		t.Fatalf("expected 1 active goal, got %+v", active.Goals)
+	}
+	resolved := decode[listResp](t, doJSON(t, h, http.MethodGet, "/v1/goals?status=resolved", nil).Body)
+	if len(resolved.Goals) != 1 || resolved.Goals[0].ID != resolveID {
+		t.Fatalf("expected only the resolved goal, got %+v", resolved.Goals)
+	}
+
+	// An unrecognised status is a 400.
+	if rec = doJSON(t, h, http.MethodGet, "/v1/goals?status=bogus", nil); rec.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad status filter, got %d", rec.Code)
+	}
+}
+
 func TestValidationErrors(t *testing.T) {
 	h := newTestServer()
 

@@ -38,6 +38,7 @@ func (s *Server) Handler() http.Handler {
 			r.Post("/", s.handleCreateGoal)
 			r.Get("/", s.handleListGoals)
 			r.Get("/{id}", s.handleGetGoal)
+			r.Patch("/{id}/status", s.handleUpdateGoalStatus)
 			r.Post("/{id}/plans", s.handleCreatePlan)
 			r.Get("/{id}/plans", s.handleGetGoalPlan)
 		})

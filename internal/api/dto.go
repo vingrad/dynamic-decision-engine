@@ -24,6 +24,14 @@ type CreateGoalRequest struct {
 	Context   domain.Context `json:"context"`
 }
 
+// UpdateGoalStatusRequest is the body for PATCH /v1/goals/{id}/status. The
+// resolution fields are used only when status is terminal (resolved/abandoned).
+type UpdateGoalStatusRequest struct {
+	Status           domain.GoalStatus    `json:"status"`
+	ResolutionResult domain.OutcomeResult `json:"resolution_result"`
+	ResolutionNotes  string               `json:"resolution_notes"`
+}
+
 // CreateSignalRequest is the body for POST /v1/signals.
 type CreateSignalRequest struct {
 	GoalID      string         `json:"goal_id"`

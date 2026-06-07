@@ -6,7 +6,9 @@ concept maps to a Go type in `internal/domain`.
 | Concept | Description |
 | --- | --- |
 | **Player** | The person, team, company or system making decisions. Owns goals. |
-| **Goal** | The objective to optimise toward, with an optional metric and target. |
+| **Goal** | The objective to optimise toward, with an optional metric and target. Also the durable identity ("case file") of a decision: all plans, signals and outcomes key off the goal id. |
+| **GoalStatus** | The goal's lifecycle state: `active` (default), `on_hold`, `resolved`, `abandoned`. `resolved`/`abandoned` are terminal. Lifecycle is metadata about the decision; it does not influence the input snapshot or the planner. |
+| **Resolution** | How a goal concluded — a `result` (reusing the Outcome vocabulary), `notes` and `resolved_at`. Present only once the goal is in a terminal status. |
 | **Context** | The current situation and relevant facts that frame a goal. Holds assets and constraints. |
 | **Asset** | A resource, skill, advantage, dataset, relationship or product the player can use. |
 | **Constraint** | A limit, risk, rule or boundary the plan must respect (budget, time, geography, policy, …). |
@@ -30,6 +32,11 @@ concept maps to a Go type in `internal/domain`.
   (`UNIQUE(plan_id, version)`, no update path).
 - **Auditability.** Every plan version carries `DecisionProvenance`, so any
   recommendation can be explained and traced back to the exact input snapshot.
+- **Goal lifecycle is the only goal mutation.** A goal's substantive fields
+  (objective, metric, target, context) are never updated in place; the sole
+  mutation path is a `GoalStatus` transition (with its `Resolution` and
+  `updated_at`). Transitions out of a terminal status are rejected, and lifecycle
+  never feeds the planner, so it cannot change an `input_snapshot_id`.
 - **Determinism (mock planner).** Given the same goal, context and signal note,
   the default planner always produces the same plan — making the system testable
   and reproducible without external services.

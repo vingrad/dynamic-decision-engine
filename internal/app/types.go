@@ -15,6 +15,16 @@ type CreateGoalInput struct {
 	Context   domain.Context
 }
 
+// UpdateGoalStatusInput is the input to UpdateGoalStatus. ResolutionResult and
+// ResolutionNotes are used only when Status is terminal (resolved/abandoned); the
+// resolution timestamp is stamped server side.
+type UpdateGoalStatusInput struct {
+	GoalID           string
+	Status           domain.GoalStatus
+	ResolutionResult domain.OutcomeResult
+	ResolutionNotes  string
+}
+
 // SignalInput is the input to ApplySignal.
 type SignalInput struct {
 	GoalID      string
