@@ -154,11 +154,21 @@ That makes the system:
 * usable offline
 * suitable for CI
 * safe to run out of the box
+* private by default — in the default configuration the engine and all decision
+  data stay on your own hardware; nothing leaves the machine, which makes it a
+  good fit for a self-hosted home-server deployment (see [Quick start](#quick-start))
 
-A real **Anthropic Claude** planner ships behind the same interface — enable it
-with `DDE_PLANNER=anthropic` and an `ANTHROPIC_API_KEY`. It elicits the structured
-plan via forced tool use and records token usage and latency as provenance. The
-mock remains the default so the system runs offline and in CI with no key.
+Want real AI planning? Bring your own key. A real **Anthropic Claude** planner
+ships behind the same interface — enable it with `DDE_PLANNER=anthropic` and your
+own `ANTHROPIC_API_KEY` (BYOK). It elicits the structured plan via forced tool
+use and records token usage and latency as provenance. Note that enabling it
+sends your inputs to Anthropic's API; the deterministic mock remains the default
+so the system runs fully local, offline, and in CI with no key.
+
+**Local AI inference is planned.** A self-hosted LLM planner (via an
+OpenAI-compatible endpoint — specific provider to be decided) is on the
+[roadmap](#roadmap), so AI-assisted planning will eventually run entirely on your
+own hardware with no cloud dependency.
 
 ---
 
@@ -295,6 +305,11 @@ DATABASE_URL=postgres://dde:dde@localhost:5432/dde?sslmode=disable \
 
 ### Run the full stack (API + admin UI + observability)
 
+This is also the one-command **self-hosting** path: anyone can run the whole stack
+on a home server, NAS, or mini-PC that has Docker. In the default configuration
+all goals, plans, versions, and history stay on that machine — your data never
+leaves your hardware.
+
 ```bash
 docker compose up --build
 ```
@@ -406,7 +421,7 @@ The initial core is implemented and tested:
 * Prometheus metrics + Grafana dashboards
 * a minimal Next.js admin UI
 
-Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
+More LLM providers, local / self-hosted inference, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
 
 ---
 
@@ -429,6 +444,7 @@ Real LLM providers, authentication, richer scoring, OpenTelemetry, and deeper ad
 * [x] Application/use-case layer with concurrency-safe replanning
 * [x] Anthropic Claude planner adapter (structured output via tool use)
 * [ ] OpenAI planner adapter (interface + placeholder in place)
+* [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Policy constraints
 * [ ] Multi-objective scoring
 * [ ] OpenTelemetry tracing
