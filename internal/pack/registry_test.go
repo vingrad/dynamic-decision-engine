@@ -5,6 +5,24 @@ import (
 	"testing"
 )
 
+func TestNewRegistryFrom(t *testing.T) {
+	extra := Descriptor{ID: "sports", Name: "Sports", Version: "1", PlannerKind: "finance"}
+	r := NewRegistryFrom(extra)
+
+	got, ok := r.Get("sports")
+	if !ok || got.ID != "sports" || got.PlannerKind != "finance" {
+		t.Fatalf("extra descriptor not resolvable: ok=%v got=%+v", ok, got)
+	}
+	// Built-ins are still present, and the default is unchanged.
+	if !r.Known("investing") || !r.Known("growth") {
+		t.Error("built-in packs should remain registered alongside extras")
+	}
+	def, _ := r.Get("")
+	if def.ID != DefaultDomain {
+		t.Errorf("default should remain %q, got %q", DefaultDomain, def.ID)
+	}
+}
+
 func TestRegistryGet(t *testing.T) {
 	r := NewRegistry()
 	tests := []struct {

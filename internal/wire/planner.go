@@ -4,7 +4,6 @@ import (
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
-	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 )
@@ -14,9 +13,11 @@ type PlannerDeps struct {
 	// Base is the underlying model planner (mock/anthropic/openai) used by the
 	// text-based domains via a GuidedPlanner.
 	Base llm.Planner
-	// Provider, when non-nil, enables the numeric finance planner for the
-	// investing domain.
-	Provider marketdata.Provider
+	// DataSources holds external data providers keyed by name (e.g. "marketdata"),
+	// from which a numeric domain's planner builder pulls the source it needs. A
+	// domain whose builder finds no matching source declines and falls back to the
+	// guided text planner.
+	DataSources map[string]DataSource
 	// Cache, when non-nil, memoises text/LLM planner results (deterministic, so no
 	// expiry). Keys are namespaced by base name and prompt.
 	Cache llm.PlanCache
@@ -52,24 +53,15 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 	for _, id := range reg.IDs() {
 		d, _ := reg.Get(id)
 
-		// Investing uses the numeric finance planner when a provider is configured.
-		if id == "investing" && deps.Provider != nil {
-			scoring, _ := effectiveScoring(d, pol)
-			fin := llm.Planner(llm.NewFinancePlanner(llm.FinanceConfig{
-				Provider:    deps.Provider,
-				Scoring:     scoring,
-				Inner:       deps.FinanceInner,
-				Now:         deps.FinanceNow,
-				PackID:      d.ID,
-				PackVersion: d.Version,
-			}))
-			// Finance is cached only via a TTL cache so plans refresh as market data
-			// moves; never via the non-expiring text cache.
-			if deps.FinanceCache != nil {
-				fin = llm.NewCachingPlanner(fin, deps.FinanceCache, deps.CacheObs)
+		// A domain that declares a PlannerKind is built by the matching registered
+		// builder (e.g. the numeric finance planner). A builder that returns a nil
+		// planner declines (e.g. its data source is not wired), and the domain falls
+		// through to the guided/base text path below — preserving prior behaviour.
+		if b, ok := plannerBuilders[d.PlannerKind]; ok && d.PlannerKind != "" {
+			if p, err := b(d, pol, deps); err == nil && p != nil {
+				routes[id] = p
+				continue
 			}
-			routes[id] = fin
-			continue
 		}
 
 		// The generic domain uses the base unchanged (empty template, no pack stamp)

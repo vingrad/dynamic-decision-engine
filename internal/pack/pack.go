@@ -8,13 +8,13 @@
 // and per-domain evaluators (an engine.EvaluatorResolver), so adding a new domain
 // is a single descriptor plus one registration — no edits across the codebase.
 //
-// Import rule: pack imports only `domain` (and `finance` for the scoring-config
-// value types). It must never import `llm` or `engine`.
+// Import rule: pack imports only `domain`. It must never import `llm`, `engine`,
+// or a specific domain's implementation (e.g. `finance`) — domain-specific config
+// rides on the opaque Scoring field and is interpreted by the wiring layer.
 package pack
 
 import (
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
-	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 )
 
 // DefaultDomain is the human-facing key of the default ("generic") domain. The
@@ -71,8 +71,17 @@ type Descriptor struct {
 	// The generic domain uses "" so its prompt is byte-for-byte the original.
 	PromptTemplate string
 
-	Eval    EvaluatorConfig
-	Scoring *finance.ScoringConfig // non-nil for quantitative domains (investing)
+	// PlannerKind selects how the domain reasons. The empty value means the
+	// guided text planner (base prompt + PromptTemplate). A named kind (e.g.
+	// "finance") selects a numeric planner registered in the wiring layer. Kept a
+	// free string so this package never enumerates planner implementations.
+	PlannerKind string
+
+	Eval EvaluatorConfig
+	// Scoring carries opaque, domain-specific scoring config consumed by the
+	// planner builder for this domain's PlannerKind (e.g. *finance.ScoringConfig
+	// for "finance"). nil for domains without numeric scoring.
+	Scoring any
 	Vocab   Vocabulary
 
 	// Validate returns soft/hard findings for a goal. Never nil for built-in packs.

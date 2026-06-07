@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 )
 
 // TestGenericPromptIsEmpty is load-bearing: a non-empty generic template would
@@ -26,10 +27,11 @@ func TestInvestingPromptAndScoring(t *testing.T) {
 			t.Errorf("investing prompt missing %q", want)
 		}
 	}
-	if d.Scoring == nil {
-		t.Fatal("investing pack must carry scoring config")
+	sc, ok := d.Scoring.(*finance.ScoringConfig)
+	if !ok || sc == nil {
+		t.Fatal("investing pack must carry a *finance.ScoringConfig")
 	}
-	if d.Scoring.Risk.MaxPositionPct <= 0 {
+	if sc.Risk.MaxPositionPct <= 0 {
 		t.Error("investing scoring risk budget should be populated")
 	}
 }

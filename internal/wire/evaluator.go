@@ -5,13 +5,13 @@
 // engine.EvaluatorResolver and an llm.PlannerRouter.
 //
 // Keeping this assembly here is what lets every other package stay decoupled —
-// pack imports only domain/finance, engine imports only domain, llm never imports
-// pack — while still supporting many domains tuned by data.
+// pack imports only domain, engine imports only domain, llm never imports pack —
+// while still supporting many domains tuned by data. Domain-specific planner
+// wiring (e.g. the finance/marketdata builder) lives in builders.go.
 package wire
 
 import (
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
-	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 )
@@ -23,18 +23,6 @@ func effectiveDelta(d pack.Descriptor, pol policy.Policy) float64 {
 		return *dp.ConfidenceDelta
 	}
 	return d.Eval.ConfidenceDelta
-}
-
-// effectiveScoring returns a domain's scoring config, applying any policy override
-// on top of the pack default. Returns (zero,false) for domains with no scoring.
-func effectiveScoring(d pack.Descriptor, pol policy.Policy) (finance.ScoringConfig, bool) {
-	if dp, ok := pol.For(d.ID); ok && dp.Scoring != nil {
-		return *dp.Scoring, true
-	}
-	if d.Scoring != nil {
-		return *d.Scoring, true
-	}
-	return finance.ScoringConfig{}, false
 }
 
 // evaluatorResolver maps a domain key to its materiality policy.
