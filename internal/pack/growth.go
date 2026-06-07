@@ -1,7 +1,5 @@
 package pack
 
-import "github.com/vingrad/dynamic-decision-engine/internal/domain"
-
 const growthPromptTemplate = `DOMAIN: GROWTH
 
 Treat each move as a growth experiment or loop aimed at one primary metric. For
@@ -29,16 +27,13 @@ func growthPack() Descriptor {
 			ConstraintKinds: []string{"budget", "runway", "team_bandwidth", "channel_saturation", "compliance"},
 			SignalKinds:     []string{"metric_change", "channel_performance", "cohort", "competitor", "customer_feedback"},
 		},
-		Validate: func(g domain.Goal) []ValidationIssue {
-			var issues []ValidationIssue
-			if g.Metric == "" {
-				issues = append(issues, ValidationIssue{
-					Field:    "metric",
-					Message:  "no growth metric set; experiments cannot be scored against a target",
-					Severity: SeverityWarning,
-				})
-			}
-			return issues
-		},
+		Validation: Validation{Rules: []ValidationRule{
+			{
+				Check:    CheckRequireMetric,
+				Field:    "metric",
+				Message:  "no growth metric set; experiments cannot be scored against a target",
+				Severity: SeverityWarning,
+			},
+		}},
 	}
 }

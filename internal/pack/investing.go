@@ -1,9 +1,6 @@
 package pack
 
 import (
-	"strings"
-
-	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 )
 
@@ -48,43 +45,23 @@ func investingPack() Descriptor {
 			ConstraintKinds: []string{"risk_tolerance", "liquidity", "time_horizon", "drawdown_limit", "mandate", "tax"},
 			SignalKinds:     []string{"price_move", "earnings", "macro", "valuation_change", "thesis_break"},
 		},
-		Validate: func(g domain.Goal) []ValidationIssue {
-			var issues []ValidationIssue
-			if !hasConstraintKind(g.Context.Constraints, "risk_tolerance") && !hasConstraintKind(g.Context.Constraints, "drawdown_limit") {
-				issues = append(issues, ValidationIssue{
-					Field:    "context.constraints",
-					Message:  "no risk_tolerance or drawdown_limit constraint; sizing will fall back to conservative defaults",
-					Severity: SeverityWarning,
-				})
-			}
-			if !hasConstraintKind(g.Context.Constraints, "time_horizon") && !hasAssetKind(g.Context.Assets, "time_horizon") {
-				issues = append(issues, ValidationIssue{
-					Field:    "context",
-					Message:  "no time_horizon given; thesis horizon-fit cannot be assessed",
-					Severity: SeverityWarning,
-				})
-			}
-			return issues
-		},
+		Validation: Validation{Rules: []ValidationRule{
+			{
+				Check:    CheckRequireAnyKind,
+				Kinds:    []string{"risk_tolerance", "drawdown_limit"},
+				Scopes:   []KindScope{ScopeConstraint},
+				Field:    "context.constraints",
+				Message:  "no risk_tolerance or drawdown_limit constraint; sizing will fall back to conservative defaults",
+				Severity: SeverityWarning,
+			},
+			{
+				Check:    CheckRequireAnyKind,
+				Kinds:    []string{"time_horizon"},
+				Scopes:   []KindScope{ScopeAsset, ScopeConstraint},
+				Field:    "context",
+				Message:  "no time_horizon given; thesis horizon-fit cannot be assessed",
+				Severity: SeverityWarning,
+			},
+		}},
 	}
-}
-
-// hasAssetKind reports whether any asset carries the given Kind (case-insensitive).
-func hasAssetKind(assets []domain.Asset, kind string) bool {
-	for _, a := range assets {
-		if strings.EqualFold(a.Kind, kind) {
-			return true
-		}
-	}
-	return false
-}
-
-// hasConstraintKind reports whether any constraint carries the given Kind.
-func hasConstraintKind(constraints []domain.Constraint, kind string) bool {
-	for _, c := range constraints {
-		if strings.EqualFold(c.Kind, kind) {
-			return true
-		}
-	}
-	return false
 }
