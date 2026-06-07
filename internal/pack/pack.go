@@ -81,6 +81,13 @@ type Descriptor struct {
 	// free string so this package never enumerates planner implementations.
 	PlannerKind string `json:"planner_kind,omitempty" yaml:"planner_kind,omitempty"`
 
+	// SourceKinds names the external-data sources this domain consults before
+	// planning, in fold order. Entries are keys into the wired source registry
+	// (the source analogue of how PlannerKind selects a planner builder). Kept a
+	// free string list so this package never enumerates source implementations and
+	// config-defined domains can declare sources. Empty means no enrichment.
+	SourceKinds []string `json:"source_kinds,omitempty" yaml:"source_kinds,omitempty"`
+
 	Eval EvaluatorConfig `json:"eval" yaml:"eval"`
 	// Scoring carries opaque, domain-specific scoring config consumed by the
 	// planner builder for this domain's PlannerKind (e.g. *finance.ScoringConfig

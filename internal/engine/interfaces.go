@@ -4,7 +4,11 @@
 // are responsible for storing the immutable plan versions it produces.
 package engine
 
-import "github.com/vingrad/dynamic-decision-engine/internal/domain"
+import (
+	"context"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+)
 
 // Evaluator decides whether a freshly generated set of ranked moves differs
 // materially from the current plan — i.e. whether replanning should cut a new
@@ -39,4 +43,25 @@ type ReplanGate interface {
 // it via WithGateResolver; when absent every signal proceeds to regeneration.
 type GateResolver interface {
 	GateFor(domainKey string) ReplanGate
+}
+
+// Enricher fetches fresh external state for a goal and folds it into the goal's
+// Context before planning, returning the enriched goal plus an audit record of every
+// source consulted. Because the enrichment lands in Context (a hashed snapshot
+// field), it is captured by the input snapshot and keeps decisions reproducible.
+//
+// Enrich must never fail a decision: a source outage degrades data quality and is
+// recorded as a stale SourceContribution, but the returned goal is still planinable
+// and no error is propagated.
+type Enricher interface {
+	Enrich(ctx context.Context, goal domain.Goal, signalKind string, payload map[string]any) (domain.Goal, []domain.SourceContribution)
+}
+
+// SourceResolver selects the external-data Enricher for a goal's domain, mirroring
+// EvaluatorResolver and GateResolver. It is declared here (rather than importing the
+// source adapters or pack registry) so the engine stays free of those dependencies;
+// the wiring layer builds it and injects it via WithSourceResolver. When absent, the
+// engine performs no enrichment, preserving the original offline behaviour.
+type SourceResolver interface {
+	SourcesFor(domainKey string) Enricher
 }

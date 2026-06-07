@@ -83,6 +83,78 @@ so backtests cannot peek at the future. The default `OfflineProvider` serves
 embedded JSON fixtures (no network, CI-safe); a real HTTP vendor is stubbed behind
 the same interface. Select with `DDE_MARKETDATA_PROVIDER=offline|http`.
 
+## External data sources (live context)
+
+A domain can pull **fresh state** (prices, availability, balances, research) into the
+goal context right before planning, so the planner reasons over the current world —
+not just what was baked into the goal at creation. This is opt-in and off by default.
+
+```
+goal.Domain ─► SourceResolver ─► Enricher ─► Source.Fetch ─► ContextDelta
+            (folded into goal.Context BEFORE planning → captured by the snapshot)
+```
+
+A `Source` is mechanism-agnostic: HTTP/REST, an MCP server, an autonomous AI agent,
+or an in-process read-model all implement the same `internal/source.Source`
+interface. Non-deterministic sources keep their non-determinism sealed inside
+`Fetch`; the engine sees one result and records it (raw payload, fetch time,
+identity) in plan provenance under `source_contributions`.
+
+**Determinism is preserved.** Fetched data lands in `Goal.Context`, which is part of
+the input snapshot hash — so the same world-state yields the same `input_snapshot_id`
+and a different world-state yields a different one. Audit-only fields (raw payload,
+timestamp) never enter the hash. With sources disabled the offline/mock path is
+byte-for-byte unchanged.
+
+**Failure never blocks a decision.** Each `Fetch` runs under `DDE_SOURCE_TIMEOUT`
+with panic recovery; a timeout/error/outage is recorded as a `stale` contribution
+(optionally serving a last-good cached value) and the plan is still produced.
+
+### Wiring sources
+
+1. Enable enrichment and point at a sources file:
+   ```bash
+   DDE_SOURCES_ENABLED=true DDE_SOURCES=examples/sources.yaml DDE_SOURCE_TIMEOUT=5s
+   ```
+2. Declare which sources a domain consults via `source_kinds` (entries are source
+   names from the sources file), e.g. in `examples/domains.yaml`:
+   ```yaml
+   - id: purchasing
+     name: Purchasing
+     source_kinds: [pricefeed]
+     # ...
+   ```
+3. Define the sources (`examples/sources.yaml`). An `http` source GETs its endpoint
+   (with `goal_id`/`signal_kind` query params) and expects a context-delta JSON body
+   (`{"facts": [...], "assets": [...], "constraints": [...]}`):
+   ```yaml
+   sources:
+     - name: pricefeed
+       kind: http
+       domain: purchasing
+       endpoint: http://localhost:8090/pricefeed
+       # api_key_env: PRICEFEED_API_KEY   # optional bearer token
+   ```
+
+End to end:
+```bash
+DDE_DOMAINS=examples/domains.yaml \
+DDE_SOURCES_ENABLED=true DDE_SOURCES=examples/sources.yaml \
+dde evaluate --input examples/purchasing-goal.json
+```
+The plan's `provenance.source_contributions` lists every source consulted and
+whether its data was stale.
+
+A policy file can override a domain's sources (full replace) via a `source_kinds`
+list, mirroring `ignore_signal_kinds`; an explicit empty list disables enrichment for
+that domain.
+
+> Built-in (Go) sources — HTTP, MCP, AI-agent, read-model/cache — live in
+> `internal/source`. The MCP and agent adapters take an injected transport, so the
+> non-determinism stays sealed and recorded. A future agentic-planner mode (the model
+> calling sources as tools mid-reasoning) reuses the same `Describe()`/`Fetch()`
+> contract — see `internal/source/doc.go`.
+
 ## Policy (config-as-data)
 
 Pack defaults can be overridden per domain by a policy file (`DDE_POLICY`,

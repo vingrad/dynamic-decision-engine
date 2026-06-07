@@ -1,5 +1,10 @@
 package domain
 
+import (
+	"encoding/json"
+	"time"
+)
+
 // DecisionProvenance explains why a plan or move was generated. It accompanies
 // every plan version so that any recommendation is auditable after the fact:
 // what reasoning produced it, from which input snapshot, and using which planner,
@@ -26,6 +31,27 @@ type DecisionProvenance struct {
 	// Notes carries human-readable detail from a composite strategy — verifier
 	// flags, agreement summary, or an escalation reason.
 	Notes string `json:"notes,omitempty"`
+
+	// SourceContributions records every external data source consulted before
+	// planning: its identity, when it was fetched, the verbatim payload, and
+	// whether the data was stale. The fetched data itself is folded into the goal
+	// Context (and so into the input snapshot); this field is the audit trail of
+	// where it came from. Empty when no sources were wired (offline / mock).
+	SourceContributions []SourceContribution `json:"source_contributions,omitempty"`
+}
+
+// SourceContribution is the audit record for one external data source consulted
+// during a decision. Raw and FetchedAt exist for audit only and never enter the
+// input snapshot hash, so they cannot affect reproducibility.
+type SourceContribution struct {
+	SourceName string          `json:"source_name"`
+	FetchedAt  time.Time       `json:"fetched_at"`
+	Stale      bool            `json:"stale,omitempty"`
+	Err        string          `json:"error,omitempty"`
+	Raw        json.RawMessage `json:"raw,omitempty"`
+	// DeltaSummary is a short human-readable note of what was folded into Context
+	// (e.g. "+3 facts, +1 constraint"); the actual delta lives in the goal Context.
+	DeltaSummary string `json:"delta_summary,omitempty"`
 }
 
 // ModelContribution records one model's participation in a (possibly multi-model)

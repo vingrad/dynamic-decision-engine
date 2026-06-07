@@ -40,6 +40,10 @@ type DomainPolicy struct {
 	IgnoreSignalKinds *[]string `json:"ignore_signal_kinds,omitempty" yaml:"ignore_signal_kinds"`
 	// Planner, when non-nil, overrides the reasoning backend for this (text) domain.
 	Planner *PlannerSpec `json:"planner,omitempty" yaml:"planner"`
+	// SourceKinds, when non-nil, replaces the pack's list of external-data sources
+	// the domain consults before planning. A nil pointer leaves the pack default; an
+	// explicit empty list disables enrichment for the domain.
+	SourceKinds *[]string `json:"source_kinds,omitempty" yaml:"source_kinds"`
 }
 
 // Policy is the full set of per-domain overrides, keyed by domain id.
