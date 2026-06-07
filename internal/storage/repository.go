@@ -52,11 +52,26 @@ type PlayerStore interface {
 	GetPlayer(ctx context.Context, id string) (domain.Player, error)
 }
 
+// GoalFilter narrows a goal listing. A zero-value filter (empty Status) matches
+// every goal; it is a struct rather than a bare parameter so further facets can be
+// added without churning every call site.
+type GoalFilter struct {
+	Status domain.GoalStatus // when set, only goals with this lifecycle status
+}
+
 // GoalStore persists goals.
 type GoalStore interface {
 	CreateGoal(ctx context.Context, g *domain.Goal) error
 	GetGoal(ctx context.Context, id string) (domain.Goal, error)
-	ListGoals(ctx context.Context, page Page) ([]domain.Goal, error)
+	ListGoals(ctx context.Context, filter GoalFilter, page Page) ([]domain.Goal, error)
+	// UpdateGoalStatus advances a goal's lifecycle state, recording the optional
+	// resolution (set only for terminal states) and the change timestamp. It is the
+	// sole mutation path for a goal; goals are otherwise append-only. The update is
+	// a compare-and-swap: it applies only if the goal's current status equals
+	// expected, returning ErrConflict on a mismatch (a concurrent transition won)
+	// and ErrNotFound if the goal does not exist. This closes the read-modify-write
+	// race in a multi-step transition use-case.
+	UpdateGoalStatus(ctx context.Context, id string, expected, status domain.GoalStatus, resolution *domain.Resolution, updatedAt time.Time) error
 }
 
 // PlanStore persists plans and their immutable versions. CreatePlanVersion appends

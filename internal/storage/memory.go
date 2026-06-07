@@ -152,13 +152,33 @@ func (m *MemoryRepository) GetGoal(_ context.Context, id string) (domain.Goal, e
 	return cloneGoal(g), nil
 }
 
-func (m *MemoryRepository) ListGoals(_ context.Context, page Page) ([]domain.Goal, error) {
+func (m *MemoryRepository) UpdateGoalStatus(_ context.Context, id string, expected, status domain.GoalStatus, resolution *domain.Resolution, updatedAt time.Time) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	g, ok := m.goals[id]
+	if !ok {
+		return ErrNotFound
+	}
+	if g.Status != expected {
+		return ErrConflict // a concurrent transition moved the goal first
+	}
+	g.Status = status
+	g.Resolution = resolution
+	g.UpdatedAt = updatedAt
+	m.goals[id] = cloneGoal(g)
+	return nil
+}
+
+func (m *MemoryRepository) ListGoals(_ context.Context, filter GoalFilter, page Page) ([]domain.Goal, error) {
 	page = page.Normalize()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
 	out := make([]domain.Goal, 0, len(m.goals))
 	for _, g := range m.goals {
+		if !goalMatchesStatus(g, filter.Status) {
+			continue
+		}
 		out = append(out, cloneGoal(g))
 	}
 	// Newest first, stable by ID for determinism.
@@ -383,6 +403,20 @@ func (m *MemoryRepository) ListOutcomes(_ context.Context, goalID string, page P
 func (m *MemoryRepository) Ping(_ context.Context) error { return nil }
 
 func (m *MemoryRepository) Close() {}
+
+// goalMatchesStatus reports whether g passes a status filter. An empty want
+// matches everything; a goal's empty stored status is treated as active so legacy
+// rows surface under the active filter (mirroring the SQL store's COALESCE).
+func goalMatchesStatus(g domain.Goal, want domain.GoalStatus) bool {
+	if want == "" {
+		return true
+	}
+	got := g.Status
+	if got == "" {
+		got = domain.GoalActive
+	}
+	return got == want
+}
 
 // pagination helpers ----------------------------------------------------------
 

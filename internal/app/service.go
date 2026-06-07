@@ -150,6 +150,7 @@ func (s *Service) CreateGoal(ctx context.Context, in CreateGoalInput) (domain.Go
 	if err != nil {
 		return domain.Goal{}, err
 	}
+	now := s.clock()
 	goal := domain.Goal{
 		ID:        domain.NewID("goal"),
 		PlayerID:  in.PlayerID,
@@ -158,7 +159,9 @@ func (s *Service) CreateGoal(ctx context.Context, in CreateGoalInput) (domain.Go
 		Metric:    in.Metric,
 		Target:    in.Target,
 		Context:   in.Context,
-		CreatedAt: s.clock(),
+		Status:    domain.GoalActive,
+		CreatedAt: now,
+		UpdatedAt: now,
 	}
 	if err := s.validateGoalDomain(goal); err != nil {
 		return domain.Goal{}, err
@@ -167,6 +170,65 @@ func (s *Service) CreateGoal(ctx context.Context, in CreateGoalInput) (domain.Go
 		return domain.Goal{}, err
 	}
 	return goal, nil
+}
+
+// UpdateGoalStatus transitions a goal's lifecycle state. Transitions out of a
+// terminal state are rejected, and moving to a terminal state (resolved or
+// abandoned) requires a resolution result; the resolution is rejected for
+// non-terminal transitions. The change timestamp and resolution time are stamped
+// server side. A goal with no status set (legacy row) is treated as active.
+func (s *Service) UpdateGoalStatus(ctx context.Context, in UpdateGoalStatusInput) (domain.Goal, error) {
+	if in.GoalID == "" {
+		return domain.Goal{}, invalid("goal_id is required")
+	}
+	if !in.Status.Valid() {
+		return domain.Goal{}, invalid("status must be one of: active, on_hold, resolved, abandoned")
+	}
+
+	goal, err := s.repo.GetGoal(ctx, in.GoalID)
+	if err != nil {
+		return domain.Goal{}, err
+	}
+
+	current := effectiveStatus(goal)
+	if !current.CanTransitionTo(in.Status) {
+		return domain.Goal{}, invalid(fmt.Sprintf("cannot transition goal from %q to %q", current, in.Status))
+	}
+
+	var resolution *domain.Resolution
+	if in.Status.Terminal() {
+		if !in.ResolutionResult.Valid() {
+			return domain.Goal{}, invalid("a resolution result (success, failure, partial, inconclusive) is required to resolve or abandon a goal")
+		}
+		resolution = &domain.Resolution{
+			Result:     in.ResolutionResult,
+			Notes:      in.ResolutionNotes,
+			ResolvedAt: s.clock(),
+		}
+	} else if in.ResolutionResult != "" || in.ResolutionNotes != "" {
+		return domain.Goal{}, invalid("a resolution may only be set when resolving or abandoning a goal")
+	}
+
+	now := s.clock()
+	// Compare-and-swap on the status we read: if a concurrent transition moved the
+	// goal between the read above and here, the store returns ErrConflict (→ 409)
+	// rather than silently clobbering the other writer.
+	if err := s.repo.UpdateGoalStatus(ctx, goal.ID, goal.Status, in.Status, resolution, now); err != nil {
+		return domain.Goal{}, err
+	}
+	goal.Status = in.Status
+	goal.Resolution = resolution
+	goal.UpdatedAt = now
+	return goal, nil
+}
+
+// effectiveStatus returns a goal's lifecycle status, treating the empty status of
+// a legacy row (written before the status column existed) as active.
+func effectiveStatus(g domain.Goal) domain.GoalStatus {
+	if g.Status == "" {
+		return domain.GoalActive
+	}
+	return g.Status
 }
 
 // normalizeDomain canonicalises the default domain to the empty string (so generic
@@ -204,9 +266,9 @@ func (s *Service) GetGoal(ctx context.Context, id string) (domain.Goal, error) {
 	return s.repo.GetGoal(ctx, id)
 }
 
-// ListGoals returns a page of goals.
-func (s *Service) ListGoals(ctx context.Context, page storage.Page) ([]domain.Goal, error) {
-	return s.repo.ListGoals(ctx, page)
+// ListGoals returns a page of goals, optionally filtered by lifecycle status.
+func (s *Service) ListGoals(ctx context.Context, filter storage.GoalFilter, page storage.Page) ([]domain.Goal, error) {
+	return s.repo.ListGoals(ctx, filter, page)
 }
 
 // GeneratePlan produces and persists the initial plan (version 1) for a goal.
@@ -214,6 +276,9 @@ func (s *Service) GeneratePlan(ctx context.Context, goalID string) (domain.PlanV
 	goal, err := s.repo.GetGoal(ctx, goalID)
 	if err != nil {
 		return domain.PlanVersion{}, err
+	}
+	if effectiveStatus(goal) != domain.GoalActive {
+		return domain.PlanVersion{}, ErrGoalNotActive
 	}
 
 	// A goal has at most one plan.
@@ -298,6 +363,9 @@ func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult
 	goal, err := s.repo.GetGoal(ctx, in.GoalID)
 	if err != nil {
 		return SignalResult{}, err
+	}
+	if effectiveStatus(goal) != domain.GoalActive {
+		return SignalResult{}, ErrGoalNotActive
 	}
 	plan, err := s.repo.GetPlanByGoal(ctx, in.GoalID)
 	if err != nil {

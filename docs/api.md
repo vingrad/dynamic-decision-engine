@@ -34,19 +34,37 @@ Create a goal with context.
 }
 ```
 
-Returns `201` with the created goal (including its generated `id`).
+Returns `201` with the created goal (including its generated `id`). New goals
+start with `status: "active"`.
 
 ### `GET /v1/goals/{id}`
 Fetch a goal.
 
 ### `GET /v1/goals`
-List goals (paginated): `{ "goals": [ ... ] }`.
+List goals (paginated): `{ "goals": [ ... ] }`. Accepts an optional
+`?status=active|on_hold|resolved|abandoned` filter; an unrecognised value is
+`400`.
+
+### `PATCH /v1/goals/{id}/status`
+Transition a goal's lifecycle status. Body:
+
+```json
+{ "status": "resolved", "resolution_result": "success", "resolution_notes": "shipped and hit target" }
+```
+
+`status` is one of `active`, `on_hold`, `resolved`, `abandoned`. Moving to a
+terminal status (`resolved`/`abandoned`) **requires** a `resolution_result`
+(`success|failure|partial|inconclusive`); the resolution is rejected for
+non-terminal transitions. Transitions out of a terminal status are `400`. The
+update is a compare-and-swap on the current status, so a losing concurrent
+transition gets `409`. Returns `200` with the updated goal.
 
 ## Plans
 
 ### `POST /v1/goals/{id}/plans`
 Generate the initial plan (version 1) for a goal and persist it. Returns `201`
-with the plan version. `409` if a plan already exists.
+with the plan version. `409` if a plan already exists, or if the goal is not
+`active` (only active goals generate plans).
 
 ### `GET /v1/goals/{id}/plans`
 Return the plan and current version for a goal, or `404` if none exists.
@@ -100,6 +118,9 @@ a new immutable version.
 ```json
 { "goal_id": "goal_...", "kind": "competitive_shift", "description": "competitor launched a free tier" }
 ```
+
+Only `active` goals accept signals; an `on_hold`, `resolved` or `abandoned` goal
+returns `409` (and a goal with no plan yet also returns `409`).
 
 Returns `200`:
 

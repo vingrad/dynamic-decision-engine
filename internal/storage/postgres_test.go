@@ -93,6 +93,56 @@ func TestPostgresPlanLifecycle(t *testing.T) {
 	}
 }
 
+func TestPostgresGoalStatusRoundTrip(t *testing.T) {
+	repo := newPostgresForTest(t)
+	ctx := context.Background()
+	now := time.Now().UTC().Truncate(time.Millisecond)
+
+	goalID := domain.NewID("goal")
+	if err := repo.CreateGoal(ctx, &domain.Goal{
+		ID:        goalID,
+		Objective: "lifecycle objective",
+		Status:    domain.GoalActive,
+		CreatedAt: now,
+		UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("create goal: %v", err)
+	}
+
+	got, err := repo.GetGoal(ctx, goalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.GoalActive || got.Resolution != nil {
+		t.Fatalf("unexpected initial goal: status=%q resolution=%+v", got.Status, got.Resolution)
+	}
+
+	at := now.Add(time.Hour)
+	res := &domain.Resolution{Result: domain.OutcomePartial, Notes: "wrapped up", ResolvedAt: at}
+	if err := repo.UpdateGoalStatus(ctx, goalID, domain.GoalActive, domain.GoalResolved, res, at); err != nil {
+		t.Fatalf("update status: %v", err)
+	}
+
+	got, err = repo.GetGoal(ctx, goalID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Status != domain.GoalResolved || !got.UpdatedAt.Equal(at) {
+		t.Fatalf("unexpected updated goal: status=%q updated=%v", got.Status, got.UpdatedAt)
+	}
+	if got.Resolution == nil || got.Resolution.Result != domain.OutcomePartial || got.Resolution.Notes != "wrapped up" {
+		t.Fatalf("unexpected resolution: %+v", got.Resolution)
+	}
+
+	// Compare-and-swap: a stale expected status conflicts; an unknown goal is not found.
+	if err := repo.UpdateGoalStatus(ctx, goalID, domain.GoalActive, domain.GoalAbandoned, nil, at); !errors.Is(err, ErrConflict) {
+		t.Errorf("expected ErrConflict on stale expected status, got %v", err)
+	}
+	if err := repo.UpdateGoalStatus(ctx, "goal_missing", domain.GoalActive, domain.GoalOnHold, nil, at); !errors.Is(err, ErrNotFound) {
+		t.Errorf("expected ErrNotFound for unknown goal, got %v", err)
+	}
+}
+
 func TestPostgresTxCommitAndRollback(t *testing.T) {
 	repo := newPostgresForTest(t)
 	ctx := context.Background()

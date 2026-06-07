@@ -132,24 +132,66 @@ func (r *PostgresRepository) CreateGoal(ctx context.Context, g *domain.Goal) err
 	if g.PlayerID != "" {
 		playerID = g.PlayerID
 	}
+	res, err := marshalResolution(g.Resolution)
+	if err != nil {
+		return err
+	}
 	_, err = r.db.Exec(ctx, `
-		INSERT INTO goals (id, player_id, domain, objective, metric, target, context, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
-		g.ID, playerID, g.Domain, g.Objective, g.Metric, g.Target, cx, g.CreatedAt)
+		INSERT INTO goals (id, player_id, domain, objective, metric, target, context, status, resolution, created_at, updated_at)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		g.ID, playerID, g.Domain, g.Objective, g.Metric, g.Target, cx, string(g.Status), res, g.CreatedAt, g.UpdatedAt)
 	return mapError(err)
 }
 
 func (r *PostgresRepository) GetGoal(ctx context.Context, id string) (domain.Goal, error) {
 	return r.scanGoal(r.db.QueryRow(ctx, `
-		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
+		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, status, resolution, created_at, updated_at
 		FROM goals WHERE id = $1`, id))
 }
 
-func (r *PostgresRepository) ListGoals(ctx context.Context, page Page) ([]domain.Goal, error) {
+func (r *PostgresRepository) UpdateGoalStatus(ctx context.Context, id string, expected, status domain.GoalStatus, resolution *domain.Resolution, updatedAt time.Time) error {
+	res, err := marshalResolution(resolution)
+	if err != nil {
+		return err
+	}
+	tag, err := r.db.Exec(ctx, `
+		UPDATE goals SET status = $3, resolution = $4, updated_at = $5
+		WHERE id = $1 AND status = $2`,
+		id, string(expected), string(status), res, updatedAt)
+	if err != nil {
+		return mapError(err)
+	}
+	if tag.RowsAffected() == 0 {
+		// No row matched both id and expected status: either the goal is gone
+		// (not found) or a concurrent transition changed its status (conflict).
+		var exists bool
+		if err := r.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM goals WHERE id = $1)`, id).Scan(&exists); err != nil {
+			return mapError(err)
+		}
+		if !exists {
+			return ErrNotFound
+		}
+		return ErrConflict
+	}
+	return nil
+}
+
+func (r *PostgresRepository) ListGoals(ctx context.Context, filter GoalFilter, page Page) ([]domain.Goal, error) {
 	page = page.Normalize()
-	rows, err := r.db.Query(ctx, `
-		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, created_at
-		FROM goals ORDER BY created_at DESC, id LIMIT $1 OFFSET $2`, page.Limit, page.Offset)
+	// Build args positionally so the optional status filter shifts LIMIT/OFFSET.
+	// COALESCE(NULLIF(status,''), 'active') treats a legacy empty status as active,
+	// matching the in-memory store's goalMatchesStatus.
+	where := ""
+	args := []any{}
+	if filter.Status != "" {
+		args = append(args, string(filter.Status))
+		where = fmt.Sprintf("WHERE COALESCE(NULLIF(status, ''), 'active') = $%d", len(args))
+	}
+	args = append(args, page.Limit, page.Offset)
+	query := fmt.Sprintf(`
+		SELECT id, COALESCE(player_id, ''), COALESCE(domain, ''), objective, metric, target, context, status, resolution, created_at, updated_at
+		FROM goals %s ORDER BY created_at DESC, id LIMIT $%d OFFSET $%d`, where, len(args)-1, len(args))
+	rows, err := r.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, mapError(err)
 	}
@@ -173,12 +215,21 @@ type rowScanner interface {
 
 func (r *PostgresRepository) scanGoal(row rowScanner) (domain.Goal, error) {
 	var g domain.Goal
-	var cx []byte
-	if err := row.Scan(&g.ID, &g.PlayerID, &g.Domain, &g.Objective, &g.Metric, &g.Target, &cx, &g.CreatedAt); err != nil {
+	var cx, res []byte
+	var status string
+	if err := row.Scan(&g.ID, &g.PlayerID, &g.Domain, &g.Objective, &g.Metric, &g.Target, &cx, &status, &res, &g.CreatedAt, &g.UpdatedAt); err != nil {
 		return domain.Goal{}, mapError(err)
 	}
 	if err := unmarshalJSON(cx, &g.Context); err != nil {
 		return domain.Goal{}, err
+	}
+	g.Status = domain.GoalStatus(status)
+	if len(res) > 0 {
+		var r domain.Resolution
+		if err := unmarshalJSON(res, &r); err != nil {
+			return domain.Goal{}, err
+		}
+		g.Resolution = &r
 	}
 	return g, nil
 }
@@ -457,6 +508,19 @@ func marshalJSON(v any) (string, error) {
 		return "", fmt.Errorf("storage: marshal json: %w", err)
 	}
 	return string(b), nil
+}
+
+// marshalResolution encodes an optional resolution for the nullable JSONB column:
+// nil maps to SQL NULL, a present value to its JSON text.
+func marshalResolution(res *domain.Resolution) (any, error) {
+	if res == nil {
+		return nil, nil
+	}
+	s, err := marshalJSON(res)
+	if err != nil {
+		return nil, err
+	}
+	return s, nil
 }
 
 func unmarshalJSON(b []byte, dst any) error {

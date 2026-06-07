@@ -51,6 +51,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusConflict, "a plan already exists for this goal")
 	case errors.Is(err, app.ErrNoPlanForGoal):
 		writeError(w, http.StatusConflict, "no plan exists for this goal; create one first")
+	case errors.Is(err, app.ErrGoalNotActive):
+		writeError(w, http.StatusConflict, "goal is not active; resume it before sending signals or generating plans")
 	case errors.Is(err, storage.ErrConflict):
 		writeError(w, http.StatusConflict, "resource conflict")
 	default:
