@@ -30,6 +30,9 @@ type Service struct {
 	log      *slog.Logger
 	queue    ReplanQueue
 	registry *pack.Registry
+	// replanRetries is how many extra times processReplan retries a transient
+	// planner error before recording the signal as failed.
+	replanRetries int
 }
 
 // Option customises a Service.
@@ -53,6 +56,16 @@ func WithReplanQueue(q ReplanQueue) Option { return func(s *Service) { s.queue =
 // When nil, domains are accepted as given (normalised only).
 func WithRegistry(r *pack.Registry) Option { return func(s *Service) { s.registry = r } }
 
+// WithReplanRetries sets how many extra times an async replan retries a transient
+// planner error (with backoff) before marking the signal failed. 0 disables retry.
+func WithReplanRetries(n int) Option {
+	return func(s *Service) {
+		if n > 0 {
+			s.replanRetries = n
+		}
+	}
+}
+
 // New constructs a Service. It wires the replanning queue's handler to the
 // service's own processReplan, defaulting to a synchronous inline queue.
 func New(repo storage.Repository, eng *engine.Engine, opts ...Option) *Service {
@@ -71,6 +84,56 @@ func New(repo storage.Repository, eng *engine.Engine, opts ...Option) *Service {
 	}
 	s.queue.Start(s.processReplan)
 	return s
+}
+
+// recoverScanLimit bounds a single recovery scan. A backlog larger than this is
+// recovered across successive restarts (the surplus stays pending).
+const recoverScanLimit = 10_000
+
+// RecoverPending re-enqueues signals still awaiting replanning (status "pending"),
+// which an in-memory async queue would otherwise lose on a crash/restart. It is a
+// single bounded scan: enqueued signals stay "pending" until a worker processes
+// them, so paging would re-read them — one capped scan re-enqueues each once, and
+// any surplus beyond the cap is recovered on a later restart. Re-running a replan
+// whose version was already written re-evaluates to immaterial (no duplicate
+// version), so recovery is at-least-once with an idempotent effect. Returns the
+// number of jobs enqueued.
+func (s *Service) RecoverPending(ctx context.Context) (int, error) {
+	pending, err := s.repo.ListPendingSignals(ctx, recoverScanLimit)
+	if err != nil {
+		return 0, err
+	}
+	if len(pending) == recoverScanLimit {
+		s.log.Warn("replan recovery hit scan cap; remaining pending signals recover on next restart", "cap", recoverScanLimit)
+	}
+
+	enqueued := 0
+	for _, sig := range pending {
+		goal, err := s.repo.GetGoal(ctx, sig.GoalID)
+		if err != nil {
+			s.log.Warn("skipping pending signal: goal not resolvable", "signal_id", sig.ID, "goal_id", sig.GoalID, "err", err)
+			continue
+		}
+		plan, err := s.repo.GetPlanByGoal(ctx, sig.GoalID)
+		if err != nil {
+			s.log.Warn("skipping pending signal: plan not resolvable", "signal_id", sig.ID, "goal_id", sig.GoalID, "err", err)
+			continue
+		}
+		if _, err := s.queue.Enqueue(ctx, ReplanJob{
+			GoalID:        goal.ID,
+			PlanID:        plan.ID,
+			Domain:        goal.Domain,
+			SignalID:      sig.ID,
+			SignalKind:    sig.Kind,
+			SignalNote:    sig.Note(),
+			SignalPayload: sig.Payload,
+			EnqueuedAt:    s.clock(),
+		}); err != nil {
+			return enqueued, err
+		}
+		enqueued++
+	}
+	return enqueued, nil
 }
 
 // Shutdown drains any in-flight asynchronous replanning work.

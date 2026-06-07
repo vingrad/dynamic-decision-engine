@@ -70,6 +70,12 @@ type Config struct {
 	ReplanAsync bool `json:"replan_async" yaml:"replan_async"`
 	// ReplanWorkers sets the async worker count when ReplanAsync is true.
 	ReplanWorkers int `json:"replan_workers" yaml:"replan_workers"`
+	// ReplanTimeout bounds a single async replan job (the planner call and its
+	// retries). A hung planner is cancelled after this, so a worker is never wedged.
+	ReplanTimeout time.Duration `json:"replan_timeout" yaml:"replan_timeout"`
+	// ReplanMaxRetries is how many extra times an async replan retries a transient
+	// planner error (with backoff) before recording the signal as failed.
+	ReplanMaxRetries int `json:"replan_max_retries" yaml:"replan_max_retries"`
 }
 
 // Default returns the baseline configuration used when nothing else is set.
@@ -100,6 +106,8 @@ func Default() Config {
 		PlanCacheTTL:             60 * time.Second,
 		ReplanAsync:              false,
 		ReplanWorkers:            4,
+		ReplanTimeout:            60 * time.Second,
+		ReplanMaxRetries:         2,
 	}
 }
 
@@ -230,6 +238,16 @@ func applyEnv(cfg *Config) {
 			cfg.ReplanWorkers = n
 		}
 	}
+	if v := os.Getenv("DDE_REPLAN_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.ReplanTimeout = d
+		}
+	}
+	if v := os.Getenv("DDE_REPLAN_MAX_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.ReplanMaxRetries = n
+		}
+	}
 }
 
 // Validate checks the configuration for obviously invalid values.
@@ -268,6 +286,12 @@ func (c Config) Validate() error {
 	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("config: request_timeout must be positive")
+	}
+	if c.ReplanTimeout <= 0 {
+		return fmt.Errorf("config: replan_timeout must be positive")
+	}
+	if c.ReplanMaxRetries < 0 {
+		return fmt.Errorf("config: replan_max_retries must not be negative")
 	}
 	return nil
 }

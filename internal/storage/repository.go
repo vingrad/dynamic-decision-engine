@@ -76,6 +76,10 @@ type SignalStore interface {
 	CreateSignal(ctx context.Context, s *domain.Signal) error
 	GetSignal(ctx context.Context, id string) (domain.Signal, error)
 	ListSignals(ctx context.Context, goalID string, page Page) ([]domain.Signal, error)
+	// ListPendingSignals returns up to limit signals still awaiting replanning
+	// (status "pending"), oldest first, across all goals. It is the recovery seam
+	// that lets a restarted process re-enqueue replans lost from an in-memory queue.
+	ListPendingSignals(ctx context.Context, limit int) ([]domain.Signal, error)
 	// MarkSignalProcessed records the terminal status of the replan a signal
 	// triggered (applied|unchanged|failed), making async outcomes queryable.
 	MarkSignalProcessed(ctx context.Context, id, status string, resultVersion int, reason, errMsg string, at time.Time) error

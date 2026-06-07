@@ -3,7 +3,10 @@ package app
 import (
 	"context"
 	"errors"
+	"time"
 
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/engine"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
@@ -28,7 +31,7 @@ func (s *Service) processReplan(ctx context.Context, job ReplanJob) (ReplanOutco
 			return s.failReplan(ctx, job, err)
 		}
 
-		result, err := s.eng.Replan(ctx, goal, current, job.SignalNote, job.SignalKind, job.SignalPayload)
+		result, err := s.replanWithRetry(ctx, goal, current, job)
 		if err != nil {
 			return s.failReplan(ctx, job, err)
 		}
@@ -53,6 +56,54 @@ func (s *Service) processReplan(ctx context.Context, job ReplanJob) (ReplanOutco
 		}
 	}
 	return s.failReplan(ctx, job, storage.ErrConflict)
+}
+
+// replanWithRetry calls the planner, retrying transient errors up to
+// s.replanRetries extra times with backoff. It stays inside processReplan and
+// before failReplan, so the signal is marked failed only after retries are
+// exhausted — a retried success never flips a recorded "failed" back to "applied".
+// The storage-conflict retry remains the caller's outer loop.
+func (s *Service) replanWithRetry(ctx context.Context, goal domain.Goal, current domain.PlanVersion, job ReplanJob) (engine.ReplanResult, error) {
+	var lastErr error
+	for attempt := 0; attempt <= s.replanRetries; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return engine.ReplanResult{}, ctx.Err()
+			case <-time.After(retryBackoff(attempt)):
+			}
+		}
+		result, err := s.eng.Replan(ctx, goal, current, job.SignalNote, job.SignalKind, job.SignalPayload)
+		if err == nil {
+			return result, nil
+		}
+		lastErr = err
+		if !isTransientReplanErr(err) {
+			return engine.ReplanResult{}, err
+		}
+		s.log.Debug("transient replan error, retrying", "signal_id", job.SignalID, "attempt", attempt+1, "err", err)
+	}
+	return engine.ReplanResult{}, lastErr
+}
+
+// isTransientReplanErr reports whether a planner error is worth retrying. Invalid
+// input (terminal) and context cancellation/timeout (the job deadline fired) are
+// not retried; anything else is treated as a transient planner/transport failure.
+func isTransientReplanErr(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+	var ve *ValidationError
+	return !errors.As(err, &ve)
+}
+
+// retryBackoff is a small exponential backoff (50ms, 100ms, 200ms, … capped at 2s).
+func retryBackoff(attempt int) time.Duration {
+	d := 50 * time.Millisecond << (attempt - 1)
+	if d > 2*time.Second {
+		d = 2 * time.Second
+	}
+	return d
 }
 
 // failReplan records a failed terminal status and the failure metric, then returns
