@@ -7,7 +7,7 @@ import (
 )
 
 func baseBudget() RiskBudget {
-	return RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.25}
+	return RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.25, MaxAggregateRiskPct: 0.06}
 }
 
 func TestEffectiveRiskBudget(t *testing.T) {
@@ -30,11 +30,11 @@ func TestEffectiveRiskBudget(t *testing.T) {
 			want: baseBudget(),
 		},
 		{
-			name: "drawdown limit tightens position and per-trade caps",
+			name: "drawdown limit tightens position, per-trade and aggregate caps",
 			constraints: []domain.Constraint{
 				{Name: "max 5% drawdown", Kind: "drawdown_limit"},
 			},
-			want: RiskBudget{MaxPortfolioRiskPct: 0.01, MaxPositionPct: 0.05, KellyFraction: 0.25},
+			want: RiskBudget{MaxPortfolioRiskPct: 0.01, MaxPositionPct: 0.05, KellyFraction: 0.25, MaxAggregateRiskPct: 0.05},
 			note: "drawdown_limit 5%",
 		},
 		{
@@ -50,7 +50,7 @@ func TestEffectiveRiskBudget(t *testing.T) {
 			constraints: []domain.Constraint{
 				{Name: "drawdown cap", Kind: "drawdown_limit", Description: "no more than 10% peak-to-trough"},
 			},
-			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.10, KellyFraction: 0.25},
+			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.10, KellyFraction: 0.25, MaxAggregateRiskPct: 0.06},
 			note: "drawdown_limit 10%",
 		},
 		{
@@ -65,7 +65,7 @@ func TestEffectiveRiskBudget(t *testing.T) {
 			constraints: []domain.Constraint{
 				{Name: "conservative risk tolerance", Kind: "risk_tolerance"},
 			},
-			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.10, KellyFraction: 0.125},
+			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.10, KellyFraction: 0.125, MaxAggregateRiskPct: 0.06},
 			note: "risk_tolerance conservative",
 		},
 		{
@@ -73,7 +73,7 @@ func TestEffectiveRiskBudget(t *testing.T) {
 			constraints: []domain.Constraint{
 				{Name: "aggressive", Kind: "risk_tolerance"},
 			},
-			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.375},
+			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.375, MaxAggregateRiskPct: 0.06},
 			note: "risk_tolerance aggressive",
 		},
 		{
@@ -89,7 +89,7 @@ func TestEffectiveRiskBudget(t *testing.T) {
 				{Name: "max 10% drawdown", Kind: "drawdown_limit"},
 				{Name: "low risk appetite", Kind: "risk_tolerance"},
 			},
-			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.05, KellyFraction: 0.125},
+			want: RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.05, KellyFraction: 0.125, MaxAggregateRiskPct: 0.06},
 			note: "drawdown_limit 10%, risk_tolerance conservative",
 		},
 	}

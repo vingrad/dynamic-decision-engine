@@ -1,16 +1,21 @@
 package finance
 
-import "math"
+import (
+	"math"
+	"time"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
+)
 
 // PortfolioPosition is one sized thesis as the portfolio aggregator sees it:
 // the suggested fraction of equity, the stop distance (so Fraction*StopFrac is
-// the capital at risk if stopped out), and the return series used to estimate
-// co-movement with the other theses.
+// the capital at risk if stopped out), and the dated bar series used to
+// estimate co-movement with the other theses.
 type PortfolioPosition struct {
 	Ticker   string
 	Fraction float64
 	StopFrac float64
-	Returns  []float64
+	Bars     []marketdata.Bar
 }
 
 // AggregateRisk is the portfolio-level capital at risk across concurrent
@@ -31,7 +36,7 @@ func AggregateRisk(positions []PortfolioPosition) float64 {
 			}
 			rho := 1.0
 			if i != j {
-				rho = Correlation(positions[i].Returns, positions[j].Returns)
+				rho = Correlation(positions[i].Bars, positions[j].Bars)
 			}
 			total += ri * rj * rho
 		}
@@ -54,30 +59,29 @@ func ScaleToRiskCap(positions []PortfolioPosition, cap float64) (scale, aggregat
 	return cap / agg, agg
 }
 
-// Correlation is the Pearson correlation of two return series aligned on their
-// most recent overlapping observations. Too little overlap (or a flat series)
-// yields 1 — co-movement is assumed, not dismissed, when it cannot be measured.
-func Correlation(a, b []float64) float64 {
-	n := len(a)
-	if len(b) < n {
-		n = len(b)
-	}
+// Correlation is the Pearson correlation of two bar series' returns aligned on
+// common bar dates — never by index position, which would pair mismatched
+// calendar windows across cadences or gappy histories. Too little overlap (or
+// a flat series) yields 1: co-movement is assumed, not dismissed, when it
+// cannot be measured, so an unmeasurable pair never earns a hedging credit.
+func Correlation(a, b []marketdata.Bar) float64 {
+	ra, rb := alignedReturns(a, b)
+	n := len(ra)
 	if n < 2 {
 		return 1
 	}
-	a, b = a[len(a)-n:], b[len(b)-n:]
 
 	var meanA, meanB float64
 	for i := 0; i < n; i++ {
-		meanA += a[i]
-		meanB += b[i]
+		meanA += ra[i]
+		meanB += rb[i]
 	}
 	meanA /= float64(n)
 	meanB /= float64(n)
 
 	var cov, varA, varB float64
 	for i := 0; i < n; i++ {
-		da, db := a[i]-meanA, b[i]-meanB
+		da, db := ra[i]-meanA, rb[i]-meanB
 		cov += da * db
 		varA += da * da
 		varB += db * db
@@ -85,13 +89,35 @@ func Correlation(a, b []float64) float64 {
 	if varA == 0 || varB == 0 {
 		return 1
 	}
-	rho := cov / math.Sqrt(varA*varB)
-	switch {
-	case rho < -1:
-		return -1
-	case rho > 1:
-		return 1
-	default:
-		return rho
+	return clampRange(cov/math.Sqrt(varA*varB), -1, 1)
+}
+
+// alignedReturns pairs the two series' bar-to-bar returns on common bar dates,
+// in chronological order. A return is keyed by the date of its later bar; only
+// dates where BOTH series have a return survive.
+func alignedReturns(a, b []marketdata.Bar) (ra, rb []float64) {
+	byDate := func(bars []marketdata.Bar) map[time.Time]float64 {
+		out := make(map[time.Time]float64, len(bars))
+		for i := 1; i < len(bars); i++ {
+			prev := bars[i-1].Close
+			if prev == 0 {
+				continue
+			}
+			out[bars[i].Date.UTC()] = (bars[i].Close - prev) / prev
+		}
+		return out
 	}
+	mb := byDate(b)
+	for i := 1; i < len(a); i++ {
+		prev := a[i-1].Close
+		if prev == 0 {
+			continue
+		}
+		date := a[i].Date.UTC()
+		if rB, ok := mb[date]; ok {
+			ra = append(ra, (a[i].Close-prev)/prev)
+			rb = append(rb, rB)
+		}
+	}
+	return ra, rb
 }

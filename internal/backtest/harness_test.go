@@ -81,3 +81,24 @@ func TestHarnessRun(t *testing.T) {
 		t.Errorf("final decision has no forward window, expected 0, got %v", last.ForwardReturn)
 	}
 }
+
+func TestTerminalDecisionLabeledByAnalyst(t *testing.T) {
+	// A scenario's final decision has a zero-length forward window; its label
+	// must come from the analyst kill label, not read as an automatic failure.
+	sc := loadScenario(t, "testdata/scenario.json")
+	sc.Events = append(sc.Events[:1], TimelineEvent{
+		At:         sc.Events[1].At,
+		Kind:       "macro",
+		Payload:    map[string]any{"indicator": "pmi", "value": 51.0, "prior": 50.5},
+		ShouldKill: false,
+	})
+
+	rep, err := newHarness(t).Run(context.Background(), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := rep.Decisions[len(rep.Decisions)-1]
+	if last.Label != 1 {
+		t.Errorf("healthy terminal decision should be labeled 1 via the analyst label, got %v", last.Label)
+	}
+}

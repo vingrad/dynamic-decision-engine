@@ -72,15 +72,16 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 			return Report{}, err
 		}
 
-		top, conf := topMove(res.Candidate)
+		top := topMove(res.Candidate)
 		rep.Decisions = append(rep.Decisions, Decision{
-			At:            ev.At,
-			Kind:          ev.Kind,
-			Material:      res.Material,
-			Reason:        res.Reason,
-			TopMove:       top,
-			TopConfidence: conf,
-			ShouldKill:    ev.ShouldKill,
+			At:               ev.At,
+			Kind:             ev.Kind,
+			Material:         res.Material,
+			Reason:           res.Reason,
+			TopMove:          top.Title,
+			TopConfidence:    top.Confidence,
+			TopRawConfidence: top.RawConfidence,
+			ShouldKill:       ev.ShouldKill,
 		})
 
 		if ev.ShouldKill {
@@ -112,16 +113,17 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 		rep.NoiseRobustness = 1 - float64(noiseReacts)/float64(noiseEvents)
 	}
 	h.scoreCalibration(ctx, &rep, h.sim.t)
-	finalTop, _ := topMove(current)
-	rep.HypotheticalPnL, _ = h.tickerReturn(ctx, tickerFromTitle(finalTop), start, h.sim.t)
+	rep.HypotheticalPnL, _ = h.tickerReturn(ctx, tickerFromTitle(topMove(current).Title), start, h.sim.t)
 	return rep, nil
 }
 
 // scoreCalibration fills per-decision forward returns and the report's Brier
 // score. The forward window runs from each decision to the scenario end; it is
 // computed after the replay, so no future data ever reaches a decision. The
-// outcome label is 1 when the top thesis's forward return is positive, falling
-// back to the analyst kill label when no return is resolvable.
+// outcome label is 1 when the top thesis's forward return is positive; when no
+// forward window exists (the scenario's final decision) or no return is
+// resolvable, the analyst kill label judges the decision instead — a
+// zero-length window must not read as an automatic failure.
 func (h *Harness) scoreCalibration(ctx context.Context, rep *Report, end time.Time) {
 	if len(rep.Decisions) == 0 {
 		return
@@ -133,7 +135,14 @@ func (h *Harness) scoreCalibration(ctx context.Context, rep *Report, end time.Ti
 		if ok {
 			d.ForwardReturn = fr
 		}
-		if (ok && fr > 0) || (!ok && !d.ShouldKill) {
+		switch {
+		case !d.At.Before(end): // no forward window: only the analyst label exists
+			if !d.ShouldKill {
+				d.Label = 1
+			}
+		case ok && fr > 0:
+			d.Label = 1
+		case !ok && !d.ShouldKill:
 			d.Label = 1
 		}
 		diff := d.TopConfidence - d.Label
@@ -169,10 +178,9 @@ func tickerFromTitle(title string) string {
 	return ticker
 }
 
-func topMove(v domain.PlanVersion) (string, float64) {
+func topMove(v domain.PlanVersion) domain.RankedMove {
 	if len(v.RankedMoves) == 0 {
-		return "", 0
+		return domain.RankedMove{}
 	}
-	m := v.RankedMoves[0]
-	return m.Title, m.Confidence
+	return v.RankedMoves[0]
 }

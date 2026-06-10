@@ -67,7 +67,10 @@ func WinProbPrior(f marketdata.Fundamentals, returns []float64) (float64, bool) 
 		}
 	}
 
-	if !informed {
+	// A zero net tilt carries no information: reporting it as informed would
+	// re-enable the volatility-scaled EV path under an effectively flat prior —
+	// the exact pathology NeutralEVScore exists to prevent.
+	if !informed || tilt == 0 {
 		return 0, false
 	}
 	return clampRange(0.5+tilt, priorFloor, priorCeil), true

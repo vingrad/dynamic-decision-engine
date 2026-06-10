@@ -396,7 +396,16 @@ func TestFinancePlannerAppliesCalibration(t *testing.T) {
 		Now:         func() time.Time { return asOf },
 		Calibration: curve,
 	})
-	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+
+	// List GLOBEX first so input order disagrees with composite order: a flat
+	// curve collapses calibrated confidences, and ranking must fall back to the
+	// raw composite, never to asset listing order.
+	g := investingGoal()
+	g.Context.Assets = []domain.Asset{
+		{Name: "GLOBEX", Kind: "ticker"},
+		{Name: "ACME", Kind: "ticker"},
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: g})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -404,6 +413,53 @@ func TestFinancePlannerAppliesCalibration(t *testing.T) {
 		if m.Confidence != 0.42 {
 			t.Errorf("%s: calibrated confidence = %v, want 0.42", m.Key, m.Confidence)
 		}
+		// The pre-calibration confidence is preserved so refits stay in the
+		// raw domain.
+		if m.RawConfidence == 0.42 || m.RawConfidence == 0 {
+			t.Errorf("%s: raw confidence should carry the uncalibrated value, got %v", m.Key, m.RawConfidence)
+		}
+	}
+	if res.RankedMoves[0].Key != "thesis:ACME" {
+		t.Errorf("flat curve must not collapse ranking onto listing order; top = %s", res.RankedMoves[0].Key)
+	}
+	if res.RankedMoves[0].RawConfidence <= res.RankedMoves[1].RawConfidence {
+		t.Errorf("rank should follow raw confidence: %v vs %v", res.RankedMoves[0].RawConfidence, res.RankedMoves[1].RawConfidence)
+	}
+}
+
+func TestFinancePlannerSmallValuationGapDoesNotChurn(t *testing.T) {
+	p := financeTestPlanner(t)
+	base, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A near-zero fair-value gap ("price is about right") must not replace the
+	// thesis upside — that would slash EV and version the plan on noise. It may
+	// only nudge the win probability.
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{
+		Goal:       investingGoal(),
+		SignalKind: "valuation_change",
+		SignalPayload: map[string]any{
+			"kind": "valuation_change", "ticker": "ACME", "metric": "pe",
+			"value": 14.0, "fair_value": 14.1, "gap_pct": 0.007,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseConf, gotConf float64
+	for _, m := range base.RankedMoves {
+		if m.Key == "thesis:ACME" {
+			baseConf = m.Confidence
+		}
+	}
+	for _, m := range res.RankedMoves {
+		if m.Key == "thesis:ACME" {
+			gotConf = m.Confidence
+		}
+	}
+	if diff := gotConf - baseConf; diff > 0.05 || diff < -0.05 {
+		t.Errorf("near-noise valuation tick moved confidence by %v (%v -> %v); must stay under the 0.05 materiality threshold", diff, baseConf, gotConf)
 	}
 }
 
@@ -425,13 +481,9 @@ func TestFinancePlannerPortfolioRiskCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range res.RankedMoves {
-		if !strings.Contains(m.Rationale, "portfolio risk cap: scale all sizes by") {
-			t.Errorf("%s: aggregate cap should bind and be named, rationale: %q", m.Key, m.Rationale)
-		}
-	}
 
-	// With the default (looser) aggregate cap the note must not appear.
+	// With the default (looser) aggregate cap the note must not appear and
+	// sizes stay unscaled.
 	base, err := financeTestPlanner(t).GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
 	if err != nil {
 		t.Fatal(err)
@@ -439,6 +491,18 @@ func TestFinancePlannerPortfolioRiskCap(t *testing.T) {
 	for _, m := range base.RankedMoves {
 		if strings.Contains(m.Rationale, "portfolio risk cap") {
 			t.Errorf("%s: default cap should not bind on fixtures, rationale: %q", m.Key, m.Rationale)
+		}
+	}
+
+	for i, m := range res.RankedMoves {
+		if !strings.Contains(m.Rationale, "portfolio risk cap binds: sizes scaled by") ||
+			!strings.Contains(m.Rationale, "capped by portfolio_risk") {
+			t.Errorf("%s: aggregate cap should bind and be named, rationale: %q", m.Key, m.Rationale)
+		}
+		// The STATED size must be the scaled one — the cap is enforced in the
+		// numbers a consumer reads, not in prose.
+		if got, unscaled := suggestedSize(t, m), suggestedSize(t, base.RankedMoves[i]); got >= unscaled {
+			t.Errorf("%s: stated size %v%% should be scaled below the uncapped %v%%", m.Key, got, unscaled)
 		}
 	}
 }

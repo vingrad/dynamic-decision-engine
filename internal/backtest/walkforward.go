@@ -38,23 +38,36 @@ func WalkForward(ctx context.Context, reg *pack.Registry, pol policy.Policy, sce
 		return WalkForwardResult{}, fmt.Errorf("backtest: trainN must split %d decisions, got %d", len(decisions), trainN)
 	}
 
+	// Fitting and evaluation both operate on the PRE-calibration confidence, the
+	// domain a freshly installed curve is applied to in production — so the
+	// comparison measures exactly what `dde calibrate` would ship, even when the
+	// replay policy already carried a curve.
 	train, eval := decisions[:trainN], decisions[trainN:]
 	samples := make([]finance.CalibrationSample, 0, len(train))
 	for _, d := range train {
-		samples = append(samples, finance.CalibrationSample{Confidence: d.TopConfidence, Success: d.Label == 1})
+		samples = append(samples, finance.CalibrationSample{Confidence: rawConfidence(d), Success: d.Label == 1})
 	}
 	curve := finance.FitCalibration(samples)
 
 	res := WalkForwardResult{TrainDecisions: len(train), EvalDecisions: len(eval), Curve: curve}
 	for _, d := range eval {
-		raw := d.TopConfidence - d.Label
-		cal := curve.Apply(d.TopConfidence) - d.Label
+		raw := rawConfidence(d) - d.Label
+		cal := curve.Apply(rawConfidence(d)) - d.Label
 		res.BrierRaw += raw * raw
 		res.BrierCalibrated += cal * cal
 	}
 	res.BrierRaw /= float64(len(eval))
 	res.BrierCalibrated /= float64(len(eval))
 	return res, nil
+}
+
+// rawConfidence is a decision's pre-calibration confidence, falling back to the
+// shipped confidence for planners (or old records) that don't report one.
+func rawConfidence(d Decision) float64 {
+	if d.TopRawConfidence > 0 {
+		return d.TopRawConfidence
+	}
+	return d.TopConfidence
 }
 
 // effectiveMatrixScoring resolves the scoring config the walk-forward replay

@@ -167,12 +167,18 @@ JSON/YAML):
       "confidence_delta": 0.03,
       "scoring": {
         "weights": { "ev": 0.4, "risk": 0.4, "liquidity": 0.1, "horizon": 0.1 },
-        "risk":    { "max_portfolio_risk_pct": 0.01, "max_position_pct": 0.10, "kelly_fraction": 0.2 }
+        "risk":    { "max_portfolio_risk_pct": 0.01, "max_position_pct": 0.10, "kelly_fraction": 0.2, "max_aggregate_risk_pct": 0.04 }
       }
     }
   }
 }
 ```
+
+A partial `scoring` override is safe: any field left zero keeps its default
+(`finance.DefaultScoringConfig`), so overriding one knob never silently zeroes
+another. To explicitly disable a risk cap (`max_position_pct`,
+`max_portfolio_risk_pct`, `max_aggregate_risk_pct`), set it to a negative
+value.
 
 ### Per-domain planner strategy
 

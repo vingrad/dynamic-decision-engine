@@ -573,7 +573,14 @@ func (s *Service) goalCalibrationSamples(ctx context.Context, goalID string) ([]
 			if !ok {
 				continue
 			}
-			samples = append(samples, finance.CalibrationSample{Confidence: move.Confidence, Success: success})
+			// Fit against the pre-calibration confidence so successive fits stay
+			// in the domain a fresh curve is applied to; plans recorded before the
+			// field existed fall back to the (then-uncalibrated) confidence.
+			conf := move.Confidence
+			if move.RawConfidence > 0 {
+				conf = move.RawConfidence
+			}
+			samples = append(samples, finance.CalibrationSample{Confidence: conf, Success: success})
 		}
 		if len(outcomes) < page.Limit {
 			return samples, nil

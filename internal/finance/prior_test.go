@@ -50,10 +50,12 @@ func TestWinProbPrior(t *testing.T) {
 			ok:   true,
 		},
 		{
-			name: "neutral PE band contributes nothing",
+			// A zero net tilt is no information: reporting it as an informed
+			// 0.50 would re-enable the volatility-scaled EV path under an
+			// effectively flat prior.
+			name: "neutral PE band alone is uninformed",
 			f:    marketdata.Fundamentals{PE: 20},
-			want: 0.50,
-			ok:   true,
+			ok:   false,
 		},
 		{
 			name:    "positive momentum tilts up",
@@ -68,10 +70,9 @@ func TestWinProbPrior(t *testing.T) {
 			ok:      true,
 		},
 		{
-			name:    "small momentum stays neutral",
+			name:    "small momentum alone is uninformed",
 			returns: []float64{0.01, 0.01},
-			want:    0.50,
-			ok:      true,
+			ok:      false,
 		},
 		{
 			name:    "maximum bearish tilt stays above the floor",

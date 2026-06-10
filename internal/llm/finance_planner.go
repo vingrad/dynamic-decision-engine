@@ -57,9 +57,10 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
-	if cfg.Scoring.Weights == (finance.ScoreWeights{}) && cfg.Scoring.Risk == (finance.RiskBudget{}) {
-		cfg.Scoring = finance.DefaultScoringConfig()
-	}
+	// Normalize fills any zero field of a partial config (a policy override that
+	// sets one knob) with the defaults, so e.g. KellyFraction can never be
+	// silently zero. A fully zero config becomes DefaultScoringConfig.
+	cfg.Scoring = cfg.Scoring.Normalize()
 	if cfg.PackID == "" {
 		cfg.PackID = "investing"
 	}
@@ -106,30 +107,42 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	budget, budgetNote := finance.EffectiveRiskBudget(p.scoring.Risk, g.Context.Constraints)
 
 	tickers := candidateTickers(g, sig)
-	moves := make([]domain.RankedMove, 0, len(tickers))
-	positions := make([]finance.PortfolioPosition, 0, len(tickers))
+	theses := make([]scoredThesis, 0, len(tickers))
 	for _, ticker := range tickers {
-		mv, pos := p.scoreThesis(ctx, ticker, g, sig, asOf, budget, budgetNote)
-		moves = append(moves, mv)
-		positions = append(positions, pos)
+		theses = append(theses, p.scoreThesis(ctx, ticker, g, sig, asOf, budget))
+	}
+
+	// Portfolio post-pass: per-thesis sizing is independent, so concurrent theses
+	// can stack more correlated capital at risk than the budget allows. When the
+	// aggregate cap binds, every suggested size is scaled BEFORE rendering, so the
+	// numbers a consumer reads are the capped ones.
+	positions := make([]finance.PortfolioPosition, len(theses))
+	for i, th := range theses {
+		frac := th.score.Position.SuggestedFraction
+		if th.broken {
+			frac = 0 // a dead thesis holds no position and consumes no risk budget
+		}
+		positions[i] = finance.PortfolioPosition{Ticker: th.ticker, Fraction: frac, StopFrac: th.lossFrac, Bars: th.bars}
+	}
+	scale, aggregate := finance.ScaleToRiskCap(positions, budget.MaxAggregateRiskPct)
+
+	moves := make([]domain.RankedMove, 0, len(theses))
+	for _, th := range theses {
+		moves = append(moves, p.buildMove(th, scale, aggregate, budget.MaxAggregateRiskPct, budgetNote))
 	}
 	if len(moves) == 0 {
 		moves = append(moves, insufficientDataMove(g))
 	}
 
-	// Portfolio post-pass: per-thesis sizing is independent, so concurrent theses
-	// can stack more correlated capital at risk than the budget allows. Scale all
-	// sizes proportionally when the aggregate cap binds.
-	if scale, agg := finance.ScaleToRiskCap(positions, budget.MaxAggregateRiskPct); scale < 1 {
-		note := fmt.Sprintf("; portfolio risk cap: scale all sizes by %.2f (correlated capital at risk %.1f%% -> %.1f%% of equity)",
-			scale, agg*100, budget.MaxAggregateRiskPct*100)
-		for i := range moves {
-			moves[i].Rationale += note
+	// Rank by confidence descending. Calibration can flatten distinct composites
+	// onto one calibrated value, so ties break on the raw (pre-calibration)
+	// confidence — never on incidental input order.
+	sort.SliceStable(moves, func(i, j int) bool {
+		if moves[i].Confidence != moves[j].Confidence {
+			return moves[i].Confidence > moves[j].Confidence
 		}
-	}
-
-	// Rank by confidence (which derives from the composite score) descending.
-	sort.SliceStable(moves, func(i, j int) bool { return moves[i].Confidence > moves[j].Confidence })
+		return moves[i].RawConfidence > moves[j].RawConfidence
+	})
 	for i := range moves {
 		moves[i].Rank = i + 1
 	}
@@ -182,17 +195,38 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	}, nil
 }
 
-// scoreThesis builds a fully-scored ranked move for one ticker, plus the
-// position view of it the portfolio post-pass aggregates across theses.
-func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) (domain.RankedMove, finance.PortfolioPosition) {
+// minValuationGap is the smallest fair-value gap treated as a thesis upside.
+// Smaller gaps ("price is near fair value") influence the plan only through the
+// win-probability hint; manufacturing an upside from them would churn plans on
+// near-noise valuation ticks.
+const minValuationGap = 0.05
+
+// scoredThesis carries one thesis's numbers between scoring and rendering, so
+// the portfolio post-pass can scale sizes before any text or move is produced.
+type scoredThesis struct {
+	ticker      string
+	score       finance.ThesisScore
+	winProb     float64
+	lossFrac    float64
+	bars        []marketdata.Bar
+	broken      bool
+	breakReason string
+}
+
+// scoreThesis computes the numeric score for one ticker. It produces no text
+// and no move — rendering happens in buildMove, after the portfolio post-pass
+// has decided whether sizes must be scaled.
+func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget) scoredThesis {
 	var (
 		vol, maxDD, avgDollarVol, barInterval float64
+		bars                                  []marketdata.Bar
 		returns                               []float64
 	)
 	if q, err := p.provider.Quote(ctx, ticker, asOf); err == nil {
 		avgDollarVol = q.AvgDollarVolume
 	}
-	if bars, err := p.provider.HistoricalBars(ctx, ticker, asOf.AddDate(-1, 0, 0), asOf); err == nil {
+	if b, err := p.provider.HistoricalBars(ctx, ticker, asOf.AddDate(-1, 0, 0), asOf); err == nil {
+		bars = b
 		returns = finance.Returns(bars)
 		vol = finance.Volatility(returns)
 		maxDD = finance.MaxDrawdown(bars)
@@ -241,10 +275,14 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		ratio = 2.0
 	}
 	// Upside defaults to the configured reward:risk multiple of the stop; a
-	// targeted valuation signal replaces it with the actual gap to fair value.
+	// targeted valuation signal replaces it with the actual gap to fair value,
+	// but only when the gap is large enough to be a thesis.
 	winFrac := ratio * lossFrac
-	if targeted && sig.Valuation != nil && sig.Valuation.GapPct > 0 {
-		winFrac = clampWinFrac(sig.Valuation.GapPct)
+	if targeted && sig.Valuation != nil && sig.Valuation.GapPct >= minValuationGap {
+		winFrac = sig.Valuation.GapPct
+		if winFrac > 1 {
+			winFrac = 1
+		}
 	}
 
 	// Intended position notional drives liquidity fit. When account equity is known
@@ -279,33 +317,61 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 	}
 	score.Composite = finance.Composite(score, p.scoring.Weights)
 	score.Position = finance.PositionFractionKelly(winProb, winFrac, lossFrac, budget)
+
+	th := scoredThesis{ticker: ticker, score: score, winProb: winProb, lossFrac: lossFrac, bars: bars}
+
+	// A thesis-break invalidates the thesis: encode it so the standard materiality
+	// evaluator naturally fires (top move/confidence changes). A break with no
+	// ticker is untargeted and invalidates every candidate thesis.
+	if sig != nil && sig.IsThesisBreak() && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker)) {
+		th.broken = true
+		th.breakReason = sig.ThesisBreak.Reason
+	}
+	return th
+}
+
+// buildMove renders a scored thesis into a ranked move, applying the portfolio
+// scale to the suggested size so the stated numbers are the capped ones.
+func (p *FinancePlanner) buildMove(th scoredThesis, scale, aggregate, aggregateCap float64, budgetNote string) domain.RankedMove {
+	score := th.score
+	if scale < 1 && score.Position.SuggestedFraction > 0 {
+		score.Position.SuggestedFraction *= scale
+		score.Position.BindingCap = "portfolio_risk"
+	}
+
 	score.Explain = fmt.Sprintf(
-		"ev=%.2f (p=%.2f) risk=%.2f liq=%.2f horizon=%.2f -> composite=%.2f; suggested size %.0f%% of equity (%s%s)",
-		score.ExpectedValueScore, winProb, score.RiskScore, score.LiquidityFitScore, score.HorizonFitScore,
+		"ev=%.2f (p=%.2f) risk=%.2f liq=%.2f horizon=%.2f -> composite=%.2f; suggested size %.1f%% of equity (%s%s)",
+		score.ExpectedValueScore, th.winProb, score.RiskScore, score.LiquidityFitScore, score.HorizonFitScore,
 		score.Composite, score.Position.SuggestedFraction*100, score.Position.SizingMethod, capSuffix(score.Position.BindingCap),
 	)
 	if budgetNote != "" {
 		score.Explain += "; risk budget per goal constraints: " + budgetNote
 	}
+	if scale < 1 {
+		score.Explain += fmt.Sprintf("; portfolio risk cap binds: sizes scaled by %.2f (correlated capital at risk %.1f%% -> %.1f%% of equity)",
+			scale, aggregate*100, aggregateCap*100)
+	}
 
 	impact, effort, risk := finance.MapToLevels(score)
-	confidence := finance.CompositeToConfidence(score.Composite)
+	raw := finance.CompositeToConfidence(score.Composite)
+	confidence := raw
 	if p.calibration != nil && !p.calibration.Empty() {
 		confidence = p.calibration.Apply(confidence)
 	}
-	stopPct := lossFrac * 100
+	stopPct := th.lossFrac * 100
 
 	move := domain.RankedMove{
-		Key:            "thesis:" + ticker,
-		Title:          "Thesis: " + ticker,
-		Description:    fmt.Sprintf("Position in %s sized to the risk budget; entry on confirmation, exit on thesis invalidation.", ticker),
+		Key:            "thesis:" + th.ticker,
+		Title:          "Thesis: " + th.ticker,
+		Description:    fmt.Sprintf("Position in %s sized to the risk budget; entry on confirmation, exit on thesis invalidation.", th.ticker),
 		Confidence:     clampConfidence(confidence),
+		RawConfidence:  clampConfidence(raw),
 		ExpectedImpact: impact,
 		Effort:         effort,
 		Risk:           risk,
 		Rationale:      score.Explain,
 		Experiment: domain.Experiment{
-			Title:        "Initiate a starter position in " + ticker,
+			Title:        "Initiate a starter position in " + th.ticker,
 			DurationDays: 30,
 			SuccessSignals: []string{
 				"Thesis driver confirmed by subsequent data",
@@ -322,24 +388,14 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		ParallelGroup: "portfolio",
 	}
 
-	pos := finance.PortfolioPosition{
-		Ticker:   ticker,
-		Fraction: score.Position.SuggestedFraction,
-		StopFrac: lossFrac,
-		Returns:  returns,
-	}
-
-	// A thesis-break invalidates the thesis: encode it so the standard materiality
-	// evaluator naturally fires (top move/confidence changes). A break with no ticker
-	// is untargeted and invalidates every candidate thesis.
-	if sig != nil && sig.IsThesisBreak() && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker)) {
+	if th.broken {
 		move.Confidence = 0
+		move.RawConfidence = 0
 		move.Risk = domain.LevelHigh
 		move.ExpectedImpact = domain.LevelLow
-		move.Rationale = "Thesis invalidated: " + sig.ThesisBreak.Reason + ". " + move.Rationale
-		pos.Fraction = 0 // a dead thesis holds no position and consumes no risk budget
+		move.Rationale = "Thesis invalidated: " + th.breakReason + ". " + move.Rationale
 	}
-	return move, pos
+	return move
 }
 
 // narrationNote builds the inner narrator's signal note: the triggering signal
@@ -409,19 +465,6 @@ func goalHorizonDays(g domain.Goal) int {
 		}
 	}
 	return 0
-}
-
-// clampWinFrac bounds a valuation-gap upside to a sane band: at least the EV
-// floor's order of magnitude, at most a double.
-func clampWinFrac(f float64) float64 {
-	switch {
-	case f < 0.05:
-		return 0.05
-	case f > 1:
-		return 1
-	default:
-		return f
-	}
 }
 
 func insufficientDataMove(g domain.Goal) domain.RankedMove {
