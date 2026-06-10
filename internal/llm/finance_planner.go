@@ -167,19 +167,28 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) domain.RankedMove {
 	var (
 		vol, maxDD, avgDollarVol float64
+		returns                  []float64
 	)
 	if q, err := p.provider.Quote(ctx, ticker, asOf); err == nil {
 		avgDollarVol = q.AvgDollarVolume
 	}
 	if bars, err := p.provider.HistoricalBars(ctx, ticker, asOf.AddDate(-1, 0, 0), asOf); err == nil {
-		vol = finance.Volatility(finance.Returns(bars))
+		returns = finance.Returns(bars)
+		vol = finance.Volatility(returns)
 		maxDD = finance.MaxDrawdown(bars)
 	}
+	funds, _ := p.provider.Fundamentals(ctx, ticker, asOf) // zero value when unknown
 
-	// A signal hint informs the win probability only for the ticker it names
-	// (an unnamed signal, e.g. macro, applies to every candidate).
+	// Win probability starts from the fundamentals/momentum prior. A signal hint
+	// wins outright — it carries event information the slow-moving prior cannot —
+	// but only for the ticker it names (an unnamed signal, e.g. macro, applies to
+	// every candidate).
 	winProb := 0.5
 	informed := false
+	if prior, ok := finance.WinProbPrior(funds, returns); ok {
+		winProb = prior
+		informed = true
+	}
 	if sig != nil && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker)) {
 		if wp, ok := sig.WinProbHint(); ok {
 			winProb = wp
@@ -220,8 +229,8 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 	score.Composite = finance.Composite(score, p.scoring.Weights)
 	score.Position = finance.PositionFractionKelly(winProb, winFrac, lossFrac, budget)
 	score.Explain = fmt.Sprintf(
-		"ev=%.2f risk=%.2f liq=%.2f horizon=%.2f -> composite=%.2f; suggested size %.0f%% of equity (%s%s)",
-		score.ExpectedValueScore, score.RiskScore, score.LiquidityFitScore, score.HorizonFitScore,
+		"ev=%.2f (p=%.2f) risk=%.2f liq=%.2f horizon=%.2f -> composite=%.2f; suggested size %.0f%% of equity (%s%s)",
+		score.ExpectedValueScore, winProb, score.RiskScore, score.LiquidityFitScore, score.HorizonFitScore,
 		score.Composite, score.Position.SuggestedFraction*100, score.Position.SizingMethod, capSuffix(score.Position.BindingCap),
 	)
 	if budgetNote != "" {

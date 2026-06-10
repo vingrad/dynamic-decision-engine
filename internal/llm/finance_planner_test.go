@@ -199,24 +199,58 @@ func TestFinancePlannerHonorsRiskConstraints(t *testing.T) {
 	}
 }
 
-func TestFinancePlannerNeutralEVWithoutSignal(t *testing.T) {
+// winProbOf extracts the "(p=X.XX)" win probability from a move rationale.
+func winProbOf(t *testing.T, m domain.RankedMove) string {
+	t.Helper()
+	match := regexp.MustCompile(`\(p=(\d\.\d\d)\)`).FindStringSubmatch(m.Rationale)
+	if match == nil {
+		t.Fatalf("no win probability in rationale: %q", m.Rationale)
+	}
+	return match[1]
+}
+
+func TestFinancePlannerPriorInformsEV(t *testing.T) {
 	p := financeTestPlanner(t)
 	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// With no signal the win probability is a flat prior; the EV component must
-	// be neutral rather than rewarding the more volatile ticker.
+	// With no signal, the fundamentals prior tilts the odds: ACME (PE 14, positive
+	// EPS) above the base rate, GLOBEX (PE 30, PB 5) below it.
+	probs := map[string]string{}
 	for _, m := range res.RankedMoves {
-		if !strings.Contains(m.Rationale, "ev=0.50") {
-			t.Errorf("%s: flat-prior EV should be neutral 0.50, rationale: %q", m.Key, m.Rationale)
-		}
+		probs[m.Key] = winProbOf(t, m)
+	}
+	if probs["thesis:ACME"] != "0.54" {
+		t.Errorf("ACME prior = %s, want 0.54 (cheap PE +0.03, positive EPS +0.01)", probs["thesis:ACME"])
+	}
+	if probs["thesis:GLOBEX"] != "0.47" {
+		t.Errorf("GLOBEX prior = %s, want 0.47 (rich PE -0.02, rich PB -0.02, positive EPS +0.01)", probs["thesis:GLOBEX"])
+	}
+}
+
+func TestFinancePlannerNeutralEVWithoutInformation(t *testing.T) {
+	p := financeTestPlanner(t)
+	// A ticker with no fundamentals and no price history carries no information:
+	// the EV component must stay neutral rather than rewarding volatility.
+	g := investingGoal()
+	g.Context.Assets = []domain.Asset{{Name: "ZZZ", Kind: "ticker"}}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.RankedMoves[0].Rationale, "ev=0.50 (p=0.50)") {
+		t.Errorf("uninformed thesis should have neutral EV, rationale: %q", res.RankedMoves[0].Rationale)
 	}
 }
 
 func TestFinancePlannerHintAppliesOnlyToNamedTicker(t *testing.T) {
 	p := financeTestPlanner(t)
-	res, err := p.GeneratePlan(context.Background(), PlanRequest{
+	base, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hinted, err := p.GeneratePlan(context.Background(), PlanRequest{
 		Goal:       investingGoal(), // ACME and GLOBEX
 		SignalKind: "valuation_change",
 		SignalPayload: map[string]any{
@@ -227,18 +261,23 @@ func TestFinancePlannerHintAppliesOnlyToNamedTicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range res.RankedMoves {
-		neutral := strings.Contains(m.Rationale, "ev=0.50")
-		switch m.Key {
-		case "thesis:ACME":
-			if neutral {
-				t.Errorf("ACME should be tilted by its valuation hint: %q", m.Rationale)
-			}
-		case "thesis:GLOBEX":
-			if !neutral {
-				t.Errorf("GLOBEX must not inherit ACME's hint: %q", m.Rationale)
+	prob := func(res PlanResult, key string) string {
+		t.Helper()
+		for _, m := range res.RankedMoves {
+			if m.Key == key {
+				return winProbOf(t, m)
 			}
 		}
+		t.Fatalf("move %q missing", key)
+		return ""
+	}
+	// The hint moves ACME's win probability (averaged with its prior) but must
+	// not leak onto GLOBEX, whose prior stays as-is.
+	if prob(hinted, "thesis:ACME") == prob(base, "thesis:ACME") {
+		t.Error("ACME win probability should move on its valuation hint")
+	}
+	if got, want := prob(hinted, "thesis:GLOBEX"), prob(base, "thesis:GLOBEX"); got != want {
+		t.Errorf("GLOBEX must not inherit ACME's hint: %s vs %s", got, want)
 	}
 }
 
