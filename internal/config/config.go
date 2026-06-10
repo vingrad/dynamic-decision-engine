@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -88,6 +89,30 @@ type Config struct {
 	// SourcesConfigPath optionally points at a JSON/YAML file declaring source
 	// adapters (HTTP endpoints, etc.) keyed by name (DDE_SOURCES). Empty means none.
 	SourcesConfigPath string `json:"sources_file" yaml:"sources_file"`
+	// WebhookURL enables best-effort webhook notifications when non-empty: domain
+	// events (goal.created, plan.created, ...) are POSTed there as JSON.
+	WebhookURL string `json:"webhook_url" yaml:"webhook_url"`
+	// WebhookSecret, when set, signs each delivery body with HMAC-SHA256 in the
+	// X-DDE-Signature header so receivers can authenticate the sender.
+	WebhookSecret string `json:"webhook_secret" yaml:"webhook_secret"`
+	// WebhookTimeout bounds a single delivery attempt.
+	WebhookTimeout time.Duration `json:"webhook_timeout" yaml:"webhook_timeout"`
+	// WebhookRetries is how many extra attempts a failed delivery gets (with backoff).
+	WebhookRetries int `json:"webhook_retries" yaml:"webhook_retries"`
+	// WebhookEvents optionally filters which event types are delivered.
+	// Empty means all. Valid names are listed in webhookEventNames.
+	WebhookEvents []string `json:"webhook_events" yaml:"webhook_events"`
+}
+
+// webhookEventNames lists the event types a webhook can subscribe to. Keep in
+// sync with the Event* constants in internal/app/notify.go.
+var webhookEventNames = []string{
+	"goal.created",
+	"plan.created",
+	"signal.received",
+	"replan.completed",
+	"outcome.recorded",
+	"goal.status_changed",
 }
 
 // Default returns the baseline configuration used when nothing else is set.
@@ -123,6 +148,11 @@ func Default() Config {
 		SourcesEnabled:           false,
 		SourceTimeout:            5 * time.Second,
 		SourcesConfigPath:        "",
+		WebhookURL:               "",
+		WebhookSecret:            "",
+		WebhookTimeout:           5 * time.Second,
+		WebhookRetries:           3,
+		WebhookEvents:            nil,
 	}
 }
 
@@ -277,6 +307,25 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("DDE_SOURCES"); v != "" {
 		cfg.SourcesConfigPath = v
 	}
+	if v := os.Getenv("DDE_WEBHOOK_URL"); v != "" {
+		cfg.WebhookURL = v
+	}
+	if v := os.Getenv("DDE_WEBHOOK_SECRET"); v != "" {
+		cfg.WebhookSecret = v
+	}
+	if v := os.Getenv("DDE_WEBHOOK_TIMEOUT"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.WebhookTimeout = d
+		}
+	}
+	if v := os.Getenv("DDE_WEBHOOK_RETRIES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.WebhookRetries = n
+		}
+	}
+	if v := os.Getenv("DDE_WEBHOOK_EVENTS"); v != "" {
+		cfg.WebhookEvents = splitAndTrim(v)
+	}
 }
 
 // Validate checks the configuration for obviously invalid values.
@@ -324,6 +373,19 @@ func (c Config) Validate() error {
 	}
 	if c.SourceTimeout < 0 {
 		return fmt.Errorf("config: source_timeout must not be negative")
+	}
+	if c.WebhookURL != "" {
+		if c.WebhookTimeout <= 0 {
+			return fmt.Errorf("config: webhook_timeout must be positive")
+		}
+		if c.WebhookRetries < 0 {
+			return fmt.Errorf("config: webhook_retries must not be negative")
+		}
+	}
+	for _, e := range c.WebhookEvents {
+		if !slices.Contains(webhookEventNames, e) {
+			return fmt.Errorf("config: unknown webhook event %q (want one of %s)", e, strings.Join(webhookEventNames, ", "))
+		}
 	}
 	return nil
 }

@@ -23,6 +23,7 @@ type Metrics struct {
 	replans      *prometheus.CounterVec
 	replanQueue  *prometheus.CounterVec
 	planCache    *prometheus.CounterVec
+	webhooks     *prometheus.CounterVec
 }
 
 // domainLabel normalises an empty domain to "generic" so the metric label is
@@ -64,9 +65,13 @@ func NewMetrics() *Metrics {
 			Name: "dde_plan_cache_total",
 			Help: "Plan-cache lookups by domain and result (hit|miss).",
 		}, []string{"domain", "result"}),
+		webhooks: prometheus.NewCounterVec(prometheus.CounterOpts{
+			Name: "dde_webhook_deliveries_total",
+			Help: "Webhook deliveries by event type and result (success|failure|dropped).",
+		}, []string{"event", "result"}),
 	}
 	reg.MustRegister(
-		m.requests, m.duration, m.planVersions, m.replans, m.replanQueue, m.planCache,
+		m.requests, m.duration, m.planVersions, m.replans, m.replanQueue, m.planCache, m.webhooks,
 		collectors.NewGoCollector(),
 		collectors.NewProcessCollector(collectors.ProcessCollectorOpts{}),
 	)
@@ -125,4 +130,9 @@ func (m *Metrics) PlanCacheHit(domain string) {
 // PlanCacheMiss records a plan-cache miss for a domain.
 func (m *Metrics) PlanCacheMiss(domain string) {
 	m.planCache.WithLabelValues(domainLabel(domain), "miss").Inc()
+}
+
+// WebhookDelivery records a webhook delivery result for an event type.
+func (m *Metrics) WebhookDelivery(event, result string) {
+	m.webhooks.WithLabelValues(event, result).Inc()
 }

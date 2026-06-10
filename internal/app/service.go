@@ -26,6 +26,7 @@ type Service struct {
 	repo     storage.Repository
 	eng      *engine.Engine
 	metrics  Metrics
+	notifier Notifier
 	clock    func() time.Time
 	log      *slog.Logger
 	queue    ReplanQueue
@@ -70,11 +71,12 @@ func WithReplanRetries(n int) Option {
 // service's own processReplan, defaulting to a synchronous inline queue.
 func New(repo storage.Repository, eng *engine.Engine, opts ...Option) *Service {
 	s := &Service{
-		repo:    repo,
-		eng:     eng,
-		metrics: nopMetrics{},
-		clock:   func() time.Time { return time.Now().UTC() },
-		log:     slog.Default(),
+		repo:     repo,
+		eng:      eng,
+		metrics:  nopMetrics{},
+		notifier: nopNotifier{},
+		clock:    func() time.Time { return time.Now().UTC() },
+		log:      slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(s)
@@ -169,6 +171,7 @@ func (s *Service) CreateGoal(ctx context.Context, in CreateGoalInput) (domain.Go
 	if err := s.repo.CreateGoal(ctx, &goal); err != nil {
 		return domain.Goal{}, err
 	}
+	s.emit(ctx, EventGoalCreated, GoalCreatedPayload{Goal: goal})
 	return goal, nil
 }
 
@@ -219,6 +222,7 @@ func (s *Service) UpdateGoalStatus(ctx context.Context, in UpdateGoalStatusInput
 	goal.Status = in.Status
 	goal.Resolution = resolution
 	goal.UpdatedAt = now
+	s.emit(ctx, EventGoalStatusChanged, GoalStatusChangedPayload{Goal: goal, PreviousStatus: current})
 	return goal, nil
 }
 
@@ -312,6 +316,7 @@ func (s *Service) GeneratePlan(ctx context.Context, goalID string) (domain.PlanV
 		return domain.PlanVersion{}, err
 	}
 	s.metrics.PlanVersionCreated(goal.Domain)
+	s.emit(ctx, EventPlanCreated, PlanCreatedPayload{GoalID: goal.ID, Version: version})
 	return version, nil
 }
 
@@ -408,7 +413,9 @@ func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult
 	}
 
 	if !enq.Synchronous {
-		// Asynchronous: accepted; the new version (if any) appears once a worker runs.
+		// Asynchronous: accepted; the new version (if any) appears once a worker
+		// runs (which emits the terminal replan.completed event).
+		s.emit(ctx, EventSignalReceived, SignalReceivedPayload{Signal: signal, Status: StatusPending})
 		return SignalResult{Signal: signal, Status: StatusPending, Material: false, PlanVersion: current}, nil
 	}
 
@@ -417,6 +424,7 @@ func (s *Service) ApplySignal(ctx context.Context, in SignalInput) (SignalResult
 	if out.Material {
 		status = StatusApplied
 	}
+	s.emit(ctx, EventSignalReceived, SignalReceivedPayload{Signal: signal, Status: status})
 	return SignalResult{Signal: signal, Status: status, Material: out.Material, Reason: out.Reason, PlanVersion: out.Version}, nil
 }
 
@@ -476,6 +484,7 @@ func (s *Service) RecordOutcome(ctx context.Context, in OutcomeInput) (domain.Ou
 	if err := s.repo.CreateOutcome(ctx, &outcome); err != nil {
 		return domain.Outcome{}, err
 	}
+	s.emit(ctx, EventOutcomeRecorded, OutcomeRecordedPayload{Outcome: outcome})
 	return outcome, nil
 }
 

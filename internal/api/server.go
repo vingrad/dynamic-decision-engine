@@ -22,18 +22,33 @@ type Server struct {
 	log     *slog.Logger
 	svc     *app.Service
 	metrics *Metrics
+	mcp     http.Handler
+}
+
+// ServerOption customises a Server.
+type ServerOption func(*Server)
+
+// WithMCP mounts h at /mcp. The handler is opaque to this package (an MCP
+// streamable-HTTP handler in practice), keeping the api package free of any
+// MCP SDK dependency.
+func WithMCP(h http.Handler) ServerOption {
+	return func(s *Server) { s.mcp = h }
 }
 
 // New constructs a Server around the application service. The same *Metrics
 // passed here should also be wired into the service so counters and the /metrics
 // endpoint share one registry.
-func New(cfg config.Config, log *slog.Logger, svc *app.Service, metrics *Metrics) *Server {
-	return &Server{
+func New(cfg config.Config, log *slog.Logger, svc *app.Service, metrics *Metrics, opts ...ServerOption) *Server {
+	s := &Server{
 		cfg:     cfg,
 		log:     log,
 		svc:     svc,
 		metrics: metrics,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
 }
 
 // Run starts the HTTP server and blocks until ctx is cancelled, then performs a
@@ -44,8 +59,11 @@ func (s *Server) Run(ctx context.Context) error {
 		Handler:           s.Handler(),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       s.cfg.RequestTimeout + 5*time.Second,
-		WriteTimeout:      s.cfg.RequestTimeout + 5*time.Second,
-		IdleTimeout:       60 * time.Second,
+		// No connection-level write deadline: /mcp streams long-lived SSE
+		// responses. The REST routes are still bounded per request by the
+		// timeout middleware (see Handler).
+		WriteTimeout: 0,
+		IdleTimeout:  60 * time.Second,
 	}
 
 	errCh := make(chan error, 1)
