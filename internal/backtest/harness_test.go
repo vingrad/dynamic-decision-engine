@@ -3,6 +3,7 @@ package backtest
 import (
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"testing"
 
@@ -55,5 +56,24 @@ func TestHarnessRun(t *testing.T) {
 	// Illustrative PnL is derived from offline ACME quotes (100 -> 108 = +8%).
 	if rep.HypotheticalPnL <= 0 {
 		t.Errorf("expected positive illustrative pnl from fixtures, got %v", rep.HypotheticalPnL)
+	}
+
+	// The valuation_change event is labeled non-kill and produces no material
+	// replan, so the run never reacts to noise.
+	if rep.NoiseRobustness != 1 {
+		t.Errorf("expected noise robustness 1, got %v", rep.NoiseRobustness)
+	}
+	// Calibration: confidence should beat a coin flip (Brier 0.25) on this
+	// scenario — ACME rallies while held, and the broken thesis ends at zero
+	// confidence with a zero forward return.
+	if rep.BrierScore <= 0 || rep.BrierScore >= 0.25 {
+		t.Errorf("expected brier score in (0, 0.25), got %v", rep.BrierScore)
+	}
+	first, last := rep.Decisions[0], rep.Decisions[len(rep.Decisions)-1]
+	if math.Abs(first.ForwardReturn-0.08) > 1e-9 {
+		t.Errorf("expected +8%% forward return on first decision from fixtures, got %v", first.ForwardReturn)
+	}
+	if last.ForwardReturn != 0 {
+		t.Errorf("final decision has no forward window, expected 0, got %v", last.ForwardReturn)
 	}
 }
