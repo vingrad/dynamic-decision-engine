@@ -34,24 +34,28 @@ flowchart TD
 
 ## Why this exists
 
-Most LLM applications generate recommendations as one-off text.
+Most LLM applications treat a recommendation as the end of the conversation:
+you ask "what should we do?", get a paragraph of text, and the system forgets
+it ever answered.
 
-That is not enough for serious systems.
+That breaks down the moment a decision matters:
 
-Real decision systems need:
+* **No accountability.** When the plan turns out wrong, there is no record of
+  what was known at decision time, which options were considered, or why one
+  was ranked above another.
+* **No reaction to change.** The world moves — a customer replies, an
+  experiment fails, a price drops — but the one-off answer doesn't, and stale
+  advice keeps getting followed.
+* **No learning.** Outcomes are never recorded against the recommendation that
+  produced them, so confidence is never tested against reality.
 
-* structured outputs
-* ranked action paths
-* fallback moves
-* success signals
-* kill / pivot criteria
-* immutable plan versions
-* decision provenance
-* auditability
-* outcome tracking
-* dynamic replanning when new signals arrive
+A real decision system treats a recommendation as a versioned, auditable
+object: ranked moves with explicit confidence and rationale, experiments with
+success signals and kill criteria, fallback options, immutable plan versions
+with full provenance — and replanning when a material signal arrives.
 
-This project explores how to build that as a clean, scalable backend component.
+This project builds exactly that, as a clean, production-oriented backend
+component.
 
 ---
 
