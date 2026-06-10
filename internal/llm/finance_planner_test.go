@@ -138,20 +138,37 @@ func TestFinancePlannerUntargetedThesisBreak(t *testing.T) {
 
 func TestFinancePlannerUsesHorizon(t *testing.T) {
 	p := financeTestPlanner(t)
-	// A goal with a stated horizon and a signal carrying a matching window should
-	// score horizon fit above the neutral 0.5 (proving it is no longer hardcoded).
-	g := investingGoal()
-	g.Context.Constraints = append(g.Context.Constraints, domain.Constraint{Name: "30 day horizon", Kind: "time_horizon"})
-	res, err := p.GeneratePlan(context.Background(), PlanRequest{
-		Goal:          g,
-		SignalKind:    "price_move",
-		SignalPayload: map[string]any{"kind": "price_move", "ticker": "ACME", "pct_change": -0.1, "window_days": 30},
-	})
+	// Horizon fit compares the goal's stated horizon against the vol-implied time
+	// for the thesis to traverse its upside. ACME's fixture volatility implies
+	// roughly a year to a 2:1 move, so a 1-year goal fits nearly perfectly and a
+	// 30-day goal fits poorly.
+	yearGoal := investingGoal()
+	yearGoal.Context.Constraints = append(yearGoal.Context.Constraints, domain.Constraint{Name: "1 year horizon", Kind: "time_horizon"})
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: yearGoal})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.RankedMoves[0].Rationale, "horizon=1.00") {
-		t.Errorf("expected perfect horizon fit (1.00) for matching 30d horizon/window, got rationale: %q", res.RankedMoves[0].Rationale)
+	if !strings.Contains(res.RankedMoves[0].Rationale, "horizon=0.99") {
+		t.Errorf("1-year goal should fit ACME's vol-implied horizon (~1y), got rationale: %q", res.RankedMoves[0].Rationale)
+	}
+
+	shortGoal := investingGoal()
+	shortGoal.Context.Constraints = append(shortGoal.Context.Constraints, domain.Constraint{Name: "30 day horizon", Kind: "time_horizon"})
+	short, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: shortGoal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(short.RankedMoves[0].Rationale, "horizon=0.25") {
+		t.Errorf("30-day goal should fit poorly (~0.25), got rationale: %q", short.RankedMoves[0].Rationale)
+	}
+
+	// Without a stated horizon the component is neutral.
+	plain, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plain.RankedMoves[0].Rationale, "horizon=0.50") {
+		t.Errorf("no stated horizon should be neutral, got rationale: %q", plain.RankedMoves[0].Rationale)
 	}
 }
 

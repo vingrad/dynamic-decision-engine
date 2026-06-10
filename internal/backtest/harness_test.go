@@ -58,10 +58,14 @@ func TestHarnessRun(t *testing.T) {
 		t.Errorf("expected positive illustrative pnl from fixtures, got %v", rep.HypotheticalPnL)
 	}
 
-	// The valuation_change event is labeled non-kill and produces no material
-	// replan, so the run never reacts to noise.
-	if rep.NoiseRobustness != 1 {
-		t.Errorf("expected noise robustness 1, got %v", rep.NoiseRobustness)
+	// The 30% valuation gap is material new information (the upside replaces the
+	// default reward:risk assumption), so the engine versions the plan on it.
+	// The event is labeled non-kill, so the noise metric records the reaction.
+	if rep.NoiseRobustness != 0 {
+		t.Errorf("expected noise robustness 0 (valuation gap is material), got %v", rep.NoiseRobustness)
+	}
+	if rep.KillPrecision != 0.5 {
+		t.Errorf("expected kill precision 0.5, got %v", rep.KillPrecision)
 	}
 	// Calibration: confidence should beat a coin flip (Brier 0.25) on this
 	// scenario — ACME rallies while held, and the broken thesis ends at zero

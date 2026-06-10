@@ -166,8 +166,8 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 // scoreThesis builds a fully-scored ranked move for one ticker.
 func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) domain.RankedMove {
 	var (
-		vol, maxDD, avgDollarVol float64
-		returns                  []float64
+		vol, maxDD, avgDollarVol, barInterval float64
+		returns                               []float64
 	)
 	if q, err := p.provider.Quote(ctx, ticker, asOf); err == nil {
 		avgDollarVol = q.AvgDollarVolume
@@ -176,8 +176,10 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		returns = finance.Returns(bars)
 		vol = finance.Volatility(returns)
 		maxDD = finance.MaxDrawdown(bars)
+		barInterval = finance.BarIntervalDays(bars)
 	}
 	funds, _ := p.provider.Fundamentals(ctx, ticker, asOf) // zero value when unknown
+	targeted := sig != nil && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker))
 
 	// Win probability starts from the fundamentals/momentum prior. A signal hint
 	// wins outright — it carries event information the slow-moving prior cannot —
@@ -189,21 +191,41 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		winProb = prior
 		informed = true
 	}
-	if sig != nil && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker)) {
+	if targeted {
 		if wp, ok := sig.WinProbHint(); ok {
 			winProb = wp
 			informed = true
 		}
 	}
-	lossFrac := vol
+
+	// The stop distance is the per-bar volatility projected onto the holding
+	// window (goal horizon, capped), so it tracks the asset instead of collapsing
+	// onto the floor for any bar cadence.
+	goalDays := goalHorizonDays(g)
+	holdingDays := goalDays
+	if holdingDays <= 0 {
+		holdingDays = finance.DefaultHoldingDays
+	}
+	if holdingDays > finance.MaxStopHoldingDays {
+		holdingDays = finance.MaxStopHoldingDays
+	}
+	lossFrac := finance.ScaledVol(vol, barInterval, holdingDays)
 	if lossFrac < 0.05 {
 		lossFrac = 0.05 // floor so sizing/EV remain well-defined on quiet fixtures
+	}
+	if lossFrac > 0.35 {
+		lossFrac = 0.35 // a wider "stop" is no longer a risk control
 	}
 	ratio := p.scoring.RewardRiskRatio
 	if ratio <= 0 {
 		ratio = 2.0
 	}
-	winFrac := ratio * lossFrac // configurable reward-to-risk assumption
+	// Upside defaults to the configured reward:risk multiple of the stop; a
+	// targeted valuation signal replaces it with the actual gap to fair value.
+	winFrac := ratio * lossFrac
+	if targeted && sig.Valuation != nil && sig.Valuation.GapPct > 0 {
+		winFrac = clampWinFrac(sig.Valuation.GapPct)
+	}
 
 	// Intended position notional drives liquidity fit. When account equity is known
 	// it is equity * the concentration cap; otherwise fall back to a fixed notional.
@@ -219,12 +241,21 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		evScore = finance.EVScore(finance.ExpectedValue(winProb, winFrac, lossFrac))
 	}
 
+	// Horizon fit compares the goal's stated horizon against the vol-implied time
+	// for the thesis to traverse its upside; neutral when either is unknown.
+	horizonFit := 0.5
+	if goalDays > 0 {
+		if implied := finance.VolImpliedHorizonDays(winFrac, vol, barInterval); implied > 0 {
+			horizonFit = finance.HorizonFit(goalDays, implied)
+		}
+	}
+
 	score := finance.ThesisScore{
 		Ticker:             ticker,
 		ExpectedValueScore: evScore,
 		RiskScore:          finance.RiskScore(vol, maxDD),
 		LiquidityFitScore:  finance.LiquidityFit(avgDollarVol, notional),
-		HorizonFitScore:    finance.HorizonFit(goalHorizonDays(g), signalWindow(sig)),
+		HorizonFitScore:    horizonFit,
 	}
 	score.Composite = finance.Composite(score, p.scoring.Weights)
 	score.Position = finance.PositionFractionKelly(winProb, winFrac, lossFrac, budget)
@@ -349,11 +380,17 @@ func goalHorizonDays(g domain.Goal) int {
 	return 0
 }
 
-func signalWindow(sig *finance.MarketSignal) int {
-	if sig != nil && sig.PriceMove != nil {
-		return sig.PriceMove.WindowDays
+// clampWinFrac bounds a valuation-gap upside to a sane band: at least the EV
+// floor's order of magnitude, at most a double.
+func clampWinFrac(f float64) float64 {
+	switch {
+	case f < 0.05:
+		return 0.05
+	case f > 1:
+		return 1
+	default:
+		return f
 	}
-	return 0
 }
 
 func insufficientDataMove(g domain.Goal) domain.RankedMove {
