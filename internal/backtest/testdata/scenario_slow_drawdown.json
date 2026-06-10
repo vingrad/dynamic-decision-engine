@@ -1,0 +1,38 @@
+{
+  "name": "ACME slow drawdown",
+  "start_at": "2026-01-23T00:00:00Z",
+  "goal": {
+    "domain": "investing",
+    "objective": "Hold ACME bought near the highs",
+    "metric": "calibrated conviction",
+    "context": {
+      "situation": "Position initiated at the local peak; the tape then bleeds without a single headline break.",
+      "assets": [
+        { "name": "ACME", "kind": "ticker", "description": "Primary thesis instrument" }
+      ],
+      "constraints": [
+        { "name": "max 10% drawdown", "kind": "drawdown_limit" }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-01-30T00:00:00Z",
+      "kind": "price_move",
+      "payload": { "ticker": "ACME", "pct_change": -0.056, "from_price": 108.0, "to_price": 102.0, "window_days": 7 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-02-06T00:00:00Z",
+      "kind": "price_move",
+      "payload": { "ticker": "ACME", "pct_change": -0.098, "from_price": 102.0, "to_price": 92.0, "window_days": 7 },
+      "should_kill": true
+    },
+    {
+      "at": "2026-02-13T00:00:00Z",
+      "kind": "valuation_change",
+      "payload": { "ticker": "ACME", "metric": "pe", "value": 16.0, "fair_value": 14.5, "gap_pct": -0.10 },
+      "should_kill": true
+    }
+  ]
+}
