@@ -16,6 +16,20 @@ It is built for use cases where a system should not simply ask an LLM “what sh
 
 The project focuses on **decision infrastructure**, not chatbot coaching.
 
+How it works at a glance:
+
+```mermaid
+flowchart TD
+    G["🎯 Goal<br/>context · assets · constraints"] --> E["Decision Engine"]
+    E --> P["Ranked action plan<br/>moves · experiments · fallbacks · provenance"]
+    P --> V[("Immutable plan versions<br/>v1 → v2 → …")]
+    S["📡 Signal<br/>new information"] --> M{"material?"}
+    M -- "yes — replan" --> E
+    M -- "no — version stands, audited" --> V
+    O["✅ Outcome<br/>recorded result"] --> V
+    V -. "world changes" .-> S
+```
+
 ---
 
 ## Why this exists
@@ -43,27 +57,7 @@ This project explores how to build that as a clean, scalable backend component.
 
 ## Core idea
 
-```text
-Goal
-  + Context
-  + Assets
-  + Constraints
-  + Signals
-  + Outcomes
-  + Live data (fetched from external sources at decision time)
-        ↓
-Decision Engine
-        ↓
-Ranked Action Plan
-        ↓
-Versioned Plan State
-        ↓
-New Signals / Outcomes
-        ↓
-Replanning
-```
-
-Instead of returning a single `next_best_action`, the engine returns ranked action paths with rationale, experiments, fallbacks, and provenance.
+Instead of returning a single `next_best_action`, the engine returns ranked action paths with rationale, experiments, fallbacks, and provenance — and keeps them versioned as the world changes (see the flow above).
 
 ---
 
