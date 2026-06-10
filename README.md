@@ -34,24 +34,32 @@ flowchart TD
 
 ## Why this exists
 
-Most LLM applications generate recommendations as one-off text.
+Most LLM applications treat a recommendation as the end of the conversation:
+you ask "what should we do?", get a paragraph of text, and the system forgets
+it ever answered.
 
-That is not enough for serious systems.
+That breaks down the moment a decision matters:
 
-Real decision systems need:
+* **No accountability.** When the plan turns out wrong, there is no record of
+  what was known at decision time, which options were considered, or why one
+  was ranked above another.
+* **No reaction to change.** The world moves — a customer replies, an
+  experiment fails, a price drops — but the one-off answer doesn't, and stale
+  advice keeps getting followed.
+* **No learning.** Outcomes are never recorded against the recommendation that
+  produced them, so confidence is never tested against reality.
 
-* structured outputs
-* ranked action paths
-* fallback moves
-* success signals
-* kill / pivot criteria
-* immutable plan versions
-* decision provenance
-* auditability
-* outcome tracking
-* dynamic replanning when new signals arrive
+A real decision system treats a recommendation as a versioned, auditable
+object: ranked moves with explicit confidence and rationale, experiments with
+success signals and kill criteria, fallback options, immutable plan versions
+with full provenance — and replanning when a material signal arrives.
 
-This project explores how to build that as a clean, scalable backend component.
+This project builds exactly that, as a clean, production-oriented backend
+component.
+
+If you're building agents, decision-support tools, or anything where *"why did
+it recommend that?"* must have an answer, this is the missing layer — see
+[Use cases](#use-cases) for what that means concretely.
 
 ---
 
@@ -311,28 +319,69 @@ Metadata explaining how a plan was generated, from which input snapshot, with wh
 
 ---
 
-## Example use cases
+## Use cases
 
-Dynamic Decision Engine is domain-agnostic.
+Three kinds of builders hit the problems this engine solves. Here is what it
+provides for each.
 
-Possible use cases include:
+### AI agents that act
 
-* AI-assisted strategic planning
-* founder growth experiments
-* product direction decisions
-* career path planning
-* sales and go-to-market planning
-* operational decision support
-* AI agent action planning
-* policy-constrained recommendation systems
-* experiment selection and replanning
-* decision audit trails for AI-assisted systems
+An agent that acts autonomously needs more than a chat reply — it needs a plan
+it can execute mechanically, abort safely, and answer for later.
 
-The core engine is intentionally generic. Domains are added as **domain packs** —
-pure-data descriptors that supply per-domain prompt guidance, materiality
-thresholds, scoring tunables, vocabulary and validation. Four ship today:
-`generic` (default), `investing` (with an optional numeric scoring planner and
-point-in-time market data), `growth` and `career`.
+* **An MCP server built in** — `dde mcp` (stdio) or `/mcp` (streamable HTTP):
+  agents create goals, fetch ranked plans, submit signals and record outcomes
+  with zero integration code.
+* **Machine-actionable moves** — every move carries confidence, expected
+  impact, effort, risk, explicit dependencies (a DAG, so the agent knows what
+  can run in parallel), fallback moves, and an experiment with success signals
+  and kill criteria it can check mechanically.
+* **Signal-driven replanning** — when the world changes, the agent submits a
+  signal; the engine decides whether it is material and versions the plan,
+  instead of the agent re-prompting from scratch and losing history.
+* **Webhooks** — `replan.completed`, `outcome.recorded` and friends trigger
+  downstream automation without polling.
+
+### Decision-support products
+
+A product that recommends actions to humans — growth experiments, operations,
+investing, sales — must explain its ranking, stay current as data changes, and
+not spam users with churn.
+
+* **Ranked alternatives, not one answer** — each move carries a rationale and
+  expected impact / effort / risk, so the UI can show *why #1 beat #2*.
+* **Domain packs** — pure-data descriptors supply the domain's vocabulary,
+  prompt guidance, scoring and validation; four ship today (`generic`,
+  `investing` with a numeric deterministic scorer over point-in-time market
+  data, `growth`, `career`), and new domains load from a config file.
+* **Live context** — external sources (HTTP, MCP, AI agents) are fetched at
+  decision time and folded into the input snapshot, so plans reason over the
+  world *now*, not goal-creation time.
+* **Materiality thresholds** — per-domain confidence deltas decide which
+  signals justify a new plan version, so users see meaningful updates only.
+* **A measurable learning loop** — outcomes are recorded against the exact
+  move acted on; `dde calibrate` fits stated confidence to observed reality,
+  and the backtest harness scores decision quality (Brier score, kill
+  precision/recall, noise robustness) before a scoring change ships.
+
+### Anything that must answer "why did it recommend that?"
+
+After the fact — an incident review, a compliance question, a postmortem — you
+must reconstruct what was known, what was considered, and why one path ranked
+above another.
+
+* **Input snapshots** — every decision records a fingerprint of exactly what
+  the planner saw (goal, context, fetched data, signal), so the decision state
+  at reasoning time is reproducible.
+* **Full provenance** — planner, model, prompt version, domain-pack version,
+  token usage, every multi-model contributor and its role, and every data
+  source consulted, with raw payload and fetch time.
+* **Immutable history** — plans are never overwritten; every revision is an
+  append-only version, and immaterial signals are recorded with the reason no
+  new version was created.
+* **Outcome addressing** — results reference `(plan_version, move_rank)`, so
+  an outcome always points at the exact move that was acted on, even after
+  later replans regenerate the move set.
 
 > 📖 **Domains, the investing pack, external data sources, policy, async replanning and backtesting:** [`docs/domains.md`](docs/domains.md)
 
