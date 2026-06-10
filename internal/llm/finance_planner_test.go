@@ -407,6 +407,42 @@ func TestFinancePlannerAppliesCalibration(t *testing.T) {
 	}
 }
 
+func TestFinancePlannerPortfolioRiskCap(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	scoring := finance.DefaultScoringConfig()
+	scoring.Risk.MaxAggregateRiskPct = 0.005 // tighter than the two theses' combined risk
+	p := NewFinancePlanner(FinanceConfig{
+		Provider: prov,
+		Scoring:  scoring,
+		Now:      func() time.Time { return asOf },
+	})
+
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.RankedMoves {
+		if !strings.Contains(m.Rationale, "portfolio risk cap: scale all sizes by") {
+			t.Errorf("%s: aggregate cap should bind and be named, rationale: %q", m.Key, m.Rationale)
+		}
+	}
+
+	// With the default (looser) aggregate cap the note must not appear.
+	base, err := financeTestPlanner(t).GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range base.RankedMoves {
+		if strings.Contains(m.Rationale, "portfolio risk cap") {
+			t.Errorf("%s: default cap should not bind on fixtures, rationale: %q", m.Key, m.Rationale)
+		}
+	}
+}
+
 func TestFinancePlannerNoTickers(t *testing.T) {
 	p := financeTestPlanner(t)
 	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: domain.Goal{Domain: "investing", Objective: "x"}})

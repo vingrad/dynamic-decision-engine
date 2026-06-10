@@ -107,11 +107,25 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 
 	tickers := candidateTickers(g, sig)
 	moves := make([]domain.RankedMove, 0, len(tickers))
+	positions := make([]finance.PortfolioPosition, 0, len(tickers))
 	for _, ticker := range tickers {
-		moves = append(moves, p.scoreThesis(ctx, ticker, g, sig, asOf, budget, budgetNote))
+		mv, pos := p.scoreThesis(ctx, ticker, g, sig, asOf, budget, budgetNote)
+		moves = append(moves, mv)
+		positions = append(positions, pos)
 	}
 	if len(moves) == 0 {
 		moves = append(moves, insufficientDataMove(g))
+	}
+
+	// Portfolio post-pass: per-thesis sizing is independent, so concurrent theses
+	// can stack more correlated capital at risk than the budget allows. Scale all
+	// sizes proportionally when the aggregate cap binds.
+	if scale, agg := finance.ScaleToRiskCap(positions, budget.MaxAggregateRiskPct); scale < 1 {
+		note := fmt.Sprintf("; portfolio risk cap: scale all sizes by %.2f (correlated capital at risk %.1f%% -> %.1f%% of equity)",
+			scale, agg*100, budget.MaxAggregateRiskPct*100)
+		for i := range moves {
+			moves[i].Rationale += note
+		}
 	}
 
 	// Rank by confidence (which derives from the composite score) descending.
@@ -168,8 +182,9 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	}, nil
 }
 
-// scoreThesis builds a fully-scored ranked move for one ticker.
-func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) domain.RankedMove {
+// scoreThesis builds a fully-scored ranked move for one ticker, plus the
+// position view of it the portfolio post-pass aggregates across theses.
+func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) (domain.RankedMove, finance.PortfolioPosition) {
 	var (
 		vol, maxDD, avgDollarVol, barInterval float64
 		returns                               []float64
@@ -307,6 +322,13 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		ParallelGroup: "portfolio",
 	}
 
+	pos := finance.PortfolioPosition{
+		Ticker:   ticker,
+		Fraction: score.Position.SuggestedFraction,
+		StopFrac: lossFrac,
+		Returns:  returns,
+	}
+
 	// A thesis-break invalidates the thesis: encode it so the standard materiality
 	// evaluator naturally fires (top move/confidence changes). A break with no ticker
 	// is untargeted and invalidates every candidate thesis.
@@ -315,8 +337,9 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		move.Risk = domain.LevelHigh
 		move.ExpectedImpact = domain.LevelLow
 		move.Rationale = "Thesis invalidated: " + sig.ThesisBreak.Reason + ". " + move.Rationale
+		pos.Fraction = 0 // a dead thesis holds no position and consumes no risk budget
 	}
-	return move
+	return move, pos
 }
 
 // narrationNote builds the inner narrator's signal note: the triggering signal

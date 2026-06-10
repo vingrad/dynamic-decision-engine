@@ -21,6 +21,9 @@ type RiskBudget struct {
 	MaxPositionPct      float64 `json:"max_position_pct"`       // concentration cap, e.g. 0.20
 	KellyFraction       float64 `json:"kelly_fraction"`         // fractional-Kelly multiplier, e.g. 0.25
 	AccountEquity       float64 `json:"account_equity"`         // optional; 0 == unknown (liquidity uses a fallback notional)
+	// MaxAggregateRiskPct caps the correlation-aware capital at risk across all
+	// concurrent theses (see AggregateRisk); 0 disables the aggregate cap.
+	MaxAggregateRiskPct float64 `json:"max_aggregate_risk_pct"`
 }
 
 // ScoringConfig bundles the tunable scorer inputs. Domain packs provide defaults;
@@ -36,8 +39,10 @@ type ScoringConfig struct {
 // not a tuned trading strategy.
 func DefaultScoringConfig() ScoringConfig {
 	return ScoringConfig{
-		Weights:         ScoreWeights{EV: 0.40, Risk: 0.30, Liquidity: 0.15, Horizon: 0.15},
-		Risk:            RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.25},
+		Weights: ScoreWeights{EV: 0.40, Risk: 0.30, Liquidity: 0.15, Horizon: 0.15},
+		// Aggregate cap: roughly three per-trade budgets' worth of correlated
+		// capital at risk across the whole book.
+		Risk:            RiskBudget{MaxPortfolioRiskPct: 0.02, MaxPositionPct: 0.20, KellyFraction: 0.25, MaxAggregateRiskPct: 0.06},
 		RewardRiskRatio: 2.0,
 	}
 }
