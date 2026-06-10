@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 )
 
@@ -378,6 +379,30 @@ func TestFinancePlannerHybridNarration(t *testing.T) {
 	for i := range res.RankedMoves {
 		if res.RankedMoves[i].Confidence != numeric.RankedMoves[i].Confidence || res.RankedMoves[i].Title != numeric.RankedMoves[i].Title {
 			t.Errorf("hybrid changed numbers at %d: %+v vs %+v", i, res.RankedMoves[i], numeric.RankedMoves[i])
+		}
+	}
+}
+
+func TestFinancePlannerAppliesCalibration(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	// A constant curve maps every stated confidence onto the observed 0.42.
+	curve := &finance.CalibrationCurve{Bins: []finance.CalibrationBin{{Mid: 0.5, Rate: 0.42, N: 20}}}
+	p := NewFinancePlanner(FinanceConfig{
+		Provider:    prov,
+		Now:         func() time.Time { return asOf },
+		Calibration: curve,
+	})
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.RankedMoves {
+		if m.Confidence != 0.42 {
+			t.Errorf("%s: calibrated confidence = %v, want 0.42", m.Key, m.Confidence)
 		}
 	}
 }

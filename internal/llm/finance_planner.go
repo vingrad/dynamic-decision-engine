@@ -33,6 +33,7 @@ type FinancePlanner struct {
 	packID         string
 	packVersion    string
 	promptTemplate string
+	calibration    *finance.CalibrationCurve
 }
 
 // FinanceConfig configures the finance planner.
@@ -46,6 +47,9 @@ type FinanceConfig struct {
 	// PromptTemplate is the pack's domain guidance. The numeric path ignores it;
 	// in hybrid mode it becomes the inner narrator's system prompt override.
 	PromptTemplate string
+	// Calibration, when non-nil and fitted, maps stated confidence onto observed
+	// outcome frequency (see finance.FitCalibration). Nil/empty is the identity.
+	Calibration *finance.CalibrationCurve
 }
 
 // NewFinancePlanner constructs the planner with sane defaults.
@@ -67,6 +71,7 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 		packID:         cfg.PackID,
 		packVersion:    cfg.PackVersion,
 		promptTemplate: cfg.PromptTemplate,
+		calibration:    cfg.Calibration,
 	}
 }
 
@@ -270,6 +275,9 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 
 	impact, effort, risk := finance.MapToLevels(score)
 	confidence := finance.CompositeToConfidence(score.Composite)
+	if p.calibration != nil && !p.calibration.Empty() {
+		confidence = p.calibration.Apply(confidence)
+	}
 	stopPct := lossFrac * 100
 
 	move := domain.RankedMove{

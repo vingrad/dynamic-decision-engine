@@ -133,11 +133,10 @@ func (h *Harness) scoreCalibration(ctx context.Context, rep *Report, end time.Ti
 		if ok {
 			d.ForwardReturn = fr
 		}
-		var label float64
 		if (ok && fr > 0) || (!ok && !d.ShouldKill) {
-			label = 1
+			d.Label = 1
 		}
-		diff := d.TopConfidence - label
+		diff := d.TopConfidence - d.Label
 		sum += diff * diff
 	}
 	rep.BrierScore = sum / float64(len(rep.Decisions))

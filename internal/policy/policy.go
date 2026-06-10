@@ -23,7 +23,7 @@ import (
 // the global configuration. It applies only to text domains; a domain that uses a
 // numeric planner (e.g. investing's finance planner) ignores it.
 type PlannerSpec struct {
-	Planner        string   `json:"planner,omitempty" yaml:"planner"`                 // mock|anthropic|openai|deepseek|multi
+	Planner        string   `json:"planner,omitempty" yaml:"planner,omitempty"`       // mock|anthropic|openai|deepseek|multi
 	MultiMode      string   `json:"multi_mode,omitempty" yaml:"multi_mode"`           // verify|route|ensemble (when Planner==multi)
 	MultiProviders []string `json:"multi_providers,omitempty" yaml:"multi_providers"` // ordered providers for the multi planner
 	Model          string   `json:"model,omitempty" yaml:"model"`                     // overrides the global LLM model id
@@ -32,18 +32,22 @@ type PlannerSpec struct {
 // DomainPolicy overrides a single domain's tunables. Pointer/optional fields mean
 // "leave the pack default" when absent.
 type DomainPolicy struct {
-	ConfidenceDelta *float64               `json:"confidence_delta,omitempty" yaml:"confidence_delta"`
-	Scoring         *finance.ScoringConfig `json:"scoring,omitempty" yaml:"scoring"`
+	ConfidenceDelta *float64               `json:"confidence_delta,omitempty" yaml:"confidence_delta,omitempty"`
+	Scoring         *finance.ScoringConfig `json:"scoring,omitempty" yaml:"scoring,omitempty"`
 	// IgnoreSignalKinds, when non-nil, replaces the pack's list of signal kinds the
 	// domain never replans on. A nil pointer leaves the pack default; an explicit
 	// empty list means "replan on every kind".
-	IgnoreSignalKinds *[]string `json:"ignore_signal_kinds,omitempty" yaml:"ignore_signal_kinds"`
+	IgnoreSignalKinds *[]string `json:"ignore_signal_kinds,omitempty" yaml:"ignore_signal_kinds,omitempty"`
 	// Planner, when non-nil, overrides the reasoning backend for this (text) domain.
-	Planner *PlannerSpec `json:"planner,omitempty" yaml:"planner"`
+	Planner *PlannerSpec `json:"planner,omitempty" yaml:"planner,omitempty"`
 	// SourceKinds, when non-nil, replaces the pack's list of external-data sources
 	// the domain consults before planning. A nil pointer leaves the pack default; an
 	// explicit empty list disables enrichment for the domain.
-	SourceKinds *[]string `json:"source_kinds,omitempty" yaml:"source_kinds"`
+	SourceKinds *[]string `json:"source_kinds,omitempty" yaml:"source_kinds,omitempty"`
+	// Calibration, when non-nil, maps the finance planner's stated confidence onto
+	// observed outcome frequencies. Fit offline by `dde calibrate`; an empty curve
+	// is the identity.
+	Calibration *finance.CalibrationCurve `json:"calibration,omitempty" yaml:"calibration,omitempty"`
 }
 
 // Policy is the full set of per-domain overrides, keyed by domain id.

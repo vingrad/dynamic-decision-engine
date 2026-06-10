@@ -18,6 +18,10 @@ type Decision struct {
 	// ForwardReturn is the top thesis ticker's return from decision time to the
 	// end of the scenario (evaluation-only attribution; never a planner input).
 	ForwardReturn float64 `json:"forward_return"`
+	// Label is the realized outcome the Brier score compares confidence against:
+	// 1 when the top thesis's forward return was positive (falling back to the
+	// analyst kill label), else 0. Evaluation-only.
+	Label float64 `json:"label"`
 }
 
 // Report summarises a backtest run. The metrics describe decision/replanning
