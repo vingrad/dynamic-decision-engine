@@ -26,12 +26,13 @@ const intendedNotional = 1_000_000.0
 //
 // It is NOT a trading system. See internal/finance/doc.go.
 type FinancePlanner struct {
-	provider    marketdata.Provider
-	scoring     finance.ScoringConfig
-	inner       Planner // optional: thesis narration only
-	now         func() time.Time
-	packID      string
-	packVersion string
+	provider       marketdata.Provider
+	scoring        finance.ScoringConfig
+	inner          Planner // optional: thesis narration only
+	now            func() time.Time
+	packID         string
+	packVersion    string
+	promptTemplate string
 }
 
 // FinanceConfig configures the finance planner.
@@ -42,6 +43,9 @@ type FinanceConfig struct {
 	Now         func() time.Time // defaults to time.Now; backtests inject sim time
 	PackID      string
 	PackVersion string
+	// PromptTemplate is the pack's domain guidance. The numeric path ignores it;
+	// in hybrid mode it becomes the inner narrator's system prompt override.
+	PromptTemplate string
 }
 
 // NewFinancePlanner constructs the planner with sane defaults.
@@ -56,12 +60,13 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 		cfg.PackID = "investing"
 	}
 	return &FinancePlanner{
-		provider:    cfg.Provider,
-		scoring:     cfg.Scoring,
-		inner:       cfg.Inner,
-		now:         cfg.Now,
-		packID:      cfg.PackID,
-		packVersion: cfg.PackVersion,
+		provider:       cfg.Provider,
+		scoring:        cfg.Scoring,
+		inner:          cfg.Inner,
+		now:            cfg.Now,
+		packID:         cfg.PackID,
+		packVersion:    cfg.PackVersion,
+		promptTemplate: cfg.PromptTemplate,
 	}
 }
 
@@ -114,9 +119,28 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	reasoning := "Each thesis is scored on expected value, risk (volatility/drawdown), liquidity and horizon fit; sizing is illustrative fractional-Kelly bounded by the risk budget."
 
 	// Hybrid: let an inner model add narrative colour without touching the numbers.
+	// The narrator sees the pack's domain guidance and the numeric scores it is
+	// annotating; its output only ever lands in the reasoning text.
+	var contributors []domain.ModelContribution
 	if p.inner != nil {
-		if r, err := p.inner.GeneratePlan(ctx, PlanRequest{Goal: g, SignalNote: req.SignalNote, SystemPromptOverride: req.SystemPromptOverride}); err == nil && r.Summary != "" {
+		override := req.SystemPromptOverride
+		if override == "" {
+			override = p.promptTemplate
+		}
+		r, err := p.inner.GeneratePlan(ctx, PlanRequest{
+			Goal:                 g,
+			SignalNote:           narrationNote(req.SignalNote, moves),
+			SystemPromptOverride: override,
+		})
+		if err == nil && r.Summary != "" {
 			reasoning = r.Summary + " " + reasoning
+			contributors = append(contributors, domain.ModelContribution{
+				Planner:          p.inner.Name(),
+				Model:            r.Invocation.Model,
+				Role:             "narrator",
+				PromptTokens:     r.Invocation.PromptTokens,
+				CompletionTokens: r.Invocation.CompletionTokens,
+			})
 		}
 	}
 
@@ -129,6 +153,7 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 		Strategy:         "single",
 		PackID:           p.packID,
 		PackVersion:      p.packVersion,
+		Contributors:     contributors,
 	}
 	return PlanResult{
 		Summary:     summary,
@@ -244,6 +269,25 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		move.Rationale = "Thesis invalidated: " + sig.ThesisBreak.Reason + ". " + move.Rationale
 	}
 	return move
+}
+
+// narrationNote builds the inner narrator's signal note: the triggering signal
+// (if any) plus the authoritative numeric scores, so the narrative can reference
+// the numbers it annotates without ever owning them.
+func narrationNote(signalNote string, moves []domain.RankedMove) string {
+	var b strings.Builder
+	if signalNote != "" {
+		b.WriteString(signalNote)
+		b.WriteString("\n")
+	}
+	b.WriteString("Numeric thesis scores (authoritative; narrate, do not change them):")
+	for _, m := range moves {
+		b.WriteString("\n- ")
+		b.WriteString(m.Title)
+		b.WriteString(": ")
+		b.WriteString(m.Rationale)
+	}
+	return b.String()
 }
 
 // candidateTickers gathers tickers from goal context assets (Kind=="ticker") and

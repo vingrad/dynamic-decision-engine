@@ -257,6 +257,75 @@ func TestFinancePlannerConcurrent(t *testing.T) {
 	wg.Wait()
 }
 
+// narrationRecorder captures the request it receives and returns a fixed summary.
+type narrationRecorder struct {
+	req PlanRequest
+}
+
+func (r *narrationRecorder) Name() string { return "recording" }
+
+func (r *narrationRecorder) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult, error) {
+	r.req = req
+	return PlanResult{
+		Summary:    "Narrated thesis colour.",
+		Invocation: domain.ModelInvocation{Model: "test-model"},
+	}, nil
+}
+
+func TestFinancePlannerHybridNarration(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := &narrationRecorder{}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	p := NewFinancePlanner(FinanceConfig{
+		Provider:       prov,
+		Inner:          inner,
+		Now:            func() time.Time { return asOf },
+		PackVersion:    "1",
+		PromptTemplate: "DOMAIN: INVESTING test guidance",
+	})
+
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal(), SignalNote: "quarterly review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The narrator receives the pack guidance and the authoritative scores.
+	if inner.req.SystemPromptOverride != "DOMAIN: INVESTING test guidance" {
+		t.Errorf("inner should receive the pack template, got %q", inner.req.SystemPromptOverride)
+	}
+	if !strings.Contains(inner.req.SignalNote, "quarterly review") {
+		t.Errorf("inner note should carry the signal note: %q", inner.req.SignalNote)
+	}
+	if !strings.Contains(inner.req.SignalNote, "Thesis: ACME") || !strings.Contains(inner.req.SignalNote, "ev=") {
+		t.Errorf("inner note should carry the numeric scores: %q", inner.req.SignalNote)
+	}
+
+	// Narration lands in reasoning; provenance records the narrator.
+	if !strings.Contains(res.Provenance.ReasoningSummary, "Narrated thesis colour.") {
+		t.Errorf("narration missing from reasoning: %q", res.Provenance.ReasoningSummary)
+	}
+	if len(res.Provenance.Contributors) != 1 || res.Provenance.Contributors[0].Role != "narrator" || res.Provenance.Contributors[0].Model != "test-model" {
+		t.Errorf("expected a narrator contributor, got %+v", res.Provenance.Contributors)
+	}
+
+	// Numbers are untouched by the narrator: same moves as the pure numeric run.
+	numeric, err := financeTestPlanner(t).GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal(), SignalNote: "quarterly review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.RankedMoves) != len(numeric.RankedMoves) {
+		t.Fatal("hybrid must not change the move set")
+	}
+	for i := range res.RankedMoves {
+		if res.RankedMoves[i].Confidence != numeric.RankedMoves[i].Confidence || res.RankedMoves[i].Title != numeric.RankedMoves[i].Title {
+			t.Errorf("hybrid changed numbers at %d: %+v vs %+v", i, res.RankedMoves[i], numeric.RankedMoves[i])
+		}
+	}
+}
+
 func TestFinancePlannerNoTickers(t *testing.T) {
 	p := financeTestPlanner(t)
 	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: domain.Goal{Domain: "investing", Objective: "x"}})

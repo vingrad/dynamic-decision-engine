@@ -185,14 +185,21 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		}
 	}
 	globalBase := newPlanner(cfg)
-	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
+	baseFor := domainBaseResolver(cfg, pol, globalBase)
+	deps := wire.PlannerDeps{
 		Base:         globalBase,
-		BaseFor:      domainBaseResolver(cfg, pol, globalBase),
+		BaseFor:      baseFor,
 		DataSources:  marketDataSources(provider),
 		Cache:        cache,
 		FinanceCache: financeCache,
 		CacheObs:     cacheObs,
-	})
+	}
+	// Hybrid mode narrates numeric theses with the investing domain's text planner;
+	// the numbers stay authoritative.
+	if cfg.FinanceHybrid {
+		deps.FinanceInner = baseFor("investing")
+	}
+	router := wire.BuildPlannerRouter(reg, pol, deps)
 	opts := []engine.Option{
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
