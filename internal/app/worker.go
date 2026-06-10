@@ -39,6 +39,7 @@ func (s *Service) processReplan(ctx context.Context, job ReplanJob) (ReplanOutco
 
 		if !result.Material {
 			s.markSignal(ctx, job.SignalID, StatusUnchanged, current.Version, result.Reason, "")
+			s.emitReplanCompleted(ctx, job, StatusUnchanged, result.Reason, "", &current)
 			return ReplanOutcome{Processed: true, Material: false, Reason: result.Reason, Version: current}, nil
 		}
 
@@ -47,6 +48,7 @@ func (s *Service) processReplan(ctx context.Context, job ReplanJob) (ReplanOutco
 		case err == nil:
 			s.metrics.PlanVersionCreated(goal.Domain)
 			s.markSignal(ctx, job.SignalID, StatusApplied, result.Candidate.Version, result.Reason, "")
+			s.emitReplanCompleted(ctx, job, StatusApplied, result.Reason, "", &result.Candidate)
 			return ReplanOutcome{Processed: true, Material: true, Reason: result.Reason, Version: result.Candidate}, nil
 		case errors.Is(err, storage.ErrConflict):
 			s.log.Debug("replan version conflict, retrying", "plan_id", job.PlanID, "attempt", attempt+1)
@@ -111,7 +113,23 @@ func retryBackoff(attempt int) time.Duration {
 func (s *Service) failReplan(ctx context.Context, job ReplanJob, err error) (ReplanOutcome, error) {
 	s.metrics.ReplanFailed(job.Domain)
 	s.markSignal(ctx, job.SignalID, StatusFailed, 0, "replan failed", err.Error())
+	s.emitReplanCompleted(ctx, job, StatusFailed, "replan failed", err.Error(), nil)
 	return ReplanOutcome{}, err
+}
+
+// emitReplanCompleted emits the terminal replan.completed event for a job. The
+// context is detached from cancellation so a job-deadline expiry (which is itself
+// a reportable outcome) does not suppress the notification.
+func (s *Service) emitReplanCompleted(ctx context.Context, job ReplanJob, status SignalStatus, reason, errMsg string, version *domain.PlanVersion) {
+	s.emit(context.WithoutCancel(ctx), EventReplanCompleted, ReplanCompletedPayload{
+		GoalID:   job.GoalID,
+		PlanID:   job.PlanID,
+		SignalID: job.SignalID,
+		Status:   status,
+		Reason:   reason,
+		Error:    errMsg,
+		Version:  version,
+	})
 }
 
 // markSignal persists the signal's terminal replanning status. A failure to record

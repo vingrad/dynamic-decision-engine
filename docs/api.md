@@ -16,6 +16,7 @@ List endpoints accept `?limit=` and `?offset=` (defaults: limit 50, max 200).
 | GET | `/health`, `/health/live` | Liveness. |
 | GET | `/health/ready` | Readiness (pings storage). |
 | GET | `/metrics` | Prometheus exposition. |
+| * | `/mcp` | MCP server (streamable HTTP) sharing the live service — see [`mcp.md`](mcp.md). |
 
 ## Goals
 
@@ -167,3 +168,80 @@ the same primitive the CLI `evaluate` command uses.
 ```
 
 Returns `200` with a plan version.
+
+## Webhooks
+
+The engine can POST domain events to a single HTTP endpoint as they happen, so
+external systems (Slack bridges, n8n/Zapier flows, agent triggers) react to
+decisions without polling. Webhooks are off by default and enabled by setting a
+URL.
+
+| Variable | Default | Description |
+| --- | --- | --- |
+| `DDE_WEBHOOK_URL` | _(empty = disabled)_ | Endpoint events are POSTed to. |
+| `DDE_WEBHOOK_SECRET` | _(empty)_ | When set, each body is signed with HMAC-SHA256 in `X-DDE-Signature`. |
+| `DDE_WEBHOOK_TIMEOUT` | `5s` | Per-attempt delivery timeout. |
+| `DDE_WEBHOOK_RETRIES` | `3` | Extra attempts after a failed delivery. |
+| `DDE_WEBHOOK_EVENTS` | _(empty = all)_ | Comma-separated event-type filter. |
+
+### Event types
+
+| Type | Fired when |
+| --- | --- |
+| `goal.created` | A goal is persisted. |
+| `plan.created` | The initial plan (version 1) is generated for a goal. |
+| `signal.received` | A signal is stored; `status` is `applied`/`unchanged` (inline replanning) or `pending` (async). |
+| `replan.completed` | Replanning finished: `applied` (new version), `unchanged` (immaterial) or `failed`. |
+| `outcome.recorded` | An outcome is recorded for a move. |
+| `goal.status_changed` | A goal's lifecycle status transitioned; payload carries `previous_status`. |
+
+With the default inline (synchronous) replan queue, one signal produces both a
+`signal.received` and a `replan.completed` event; filter with
+`DDE_WEBHOOK_EVENTS` if you only want one.
+
+### Delivery format
+
+Each delivery is a JSON envelope:
+
+```json
+{
+  "id": "evt_u7ctmqbm3f6fhdux",
+  "type": "replan.completed",
+  "created_at": "2026-06-10T19:38:30Z",
+  "payload": {
+    "goal_id": "goal_ikjtghtpm265ij6n",
+    "plan_id": "plan_x2x3hwc2ujadkkqi",
+    "signal_id": "sig_4nrqkm66g3qhd3xr",
+    "status": "applied",
+    "reason": "confidence shifted materially",
+    "version": { "plan_id": "plan_x2x3hwc2ujadkkqi", "version": 2, "...": "..." }
+  }
+}
+```
+
+Headers: `Content-Type: application/json`, `X-DDE-Event` (the type),
+`X-DDE-Delivery` (the event id), and — when a secret is configured —
+`X-DDE-Signature: sha256=<hex>`, the HMAC-SHA256 of the raw request body keyed
+with the secret. Verify it by recomputing:
+
+```python
+import hashlib, hmac
+expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+ok = hmac.compare_digest(expected, request.headers["X-DDE-Signature"])
+```
+
+### Delivery semantics
+
+Delivery is **best-effort, at-most-once**: events are queued in memory and
+POSTed by background workers. Transport errors, `429` and `5xx` responses are
+retried with exponential backoff and jitter; other `4xx` responses are treated
+as receiver misconfiguration and not retried. If the queue overflows (receiver
+down for long) or the process crashes, events are dropped — the store remains
+the source of truth, so receivers needing a complete picture should reconcile
+via the REST API. On graceful shutdown queued events are drained before exit.
+Deliveries are observable via the `dde_webhook_deliveries_total{event,result}`
+metric (`success|failure|dropped`) and warn-level logs.
+
+The webhook notifier runs in the long-lived transports (`dde serve`,
+`dde mcp`); one-shot CLI commands (`dde evaluate`, `dde signal`) do not emit
+events.

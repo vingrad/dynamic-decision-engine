@@ -4,11 +4,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/api"
@@ -20,9 +23,11 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/logging"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
+	mcpserver "github.com/vingrad/dynamic-decision-engine/internal/mcp"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
+	"github.com/vingrad/dynamic-decision-engine/internal/webhook"
 	"github.com/vingrad/dynamic-decision-engine/internal/wire"
 )
 
@@ -204,6 +209,87 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 	return engine.New(router, opts...), nil
 }
 
+// buildService opens storage and assembles the full production service: domain
+// registry, policy, engine, metrics, optional webhook notifier and optional
+// async replan queue (including crash recovery). It is shared by the long-running
+// transports (serve, mcp). The returned cleanup drains the service (in-flight
+// replans first, then queued webhook deliveries — replans emit events) and
+// closes the repository; call it on shutdown.
+func buildService(ctx context.Context, cfg config.Config, log *slog.Logger, metrics *api.Metrics) (*app.Service, func(), error) {
+	repo, err := storage.Open(ctx, storage.Options{
+		DatabaseURL: cfg.DatabaseURL,
+		MaxConns:    cfg.DBMaxConns,
+	}, log)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	reg, err := buildRegistry(cfg)
+	if err != nil {
+		repo.Close()
+		return nil, nil, err
+	}
+	pol, err := policy.Load(cfg.PolicyFile)
+	if err != nil {
+		repo.Close()
+		return nil, nil, err
+	}
+	eng, err := newEngine(cfg, reg, pol, metrics)
+	if err != nil {
+		repo.Close()
+		return nil, nil, err
+	}
+
+	opts := []app.Option{app.WithMetrics(metrics), app.WithLogger(log), app.WithRegistry(reg)}
+	var hooks *webhook.Dispatcher
+	if cfg.WebhookURL != "" {
+		hooks = webhook.New(webhook.Config{
+			URL:     cfg.WebhookURL,
+			Secret:  cfg.WebhookSecret,
+			Timeout: cfg.WebhookTimeout,
+			Retries: cfg.WebhookRetries,
+			Events:  cfg.WebhookEvents,
+		}, log, metrics)
+		opts = append(opts, app.WithNotifier(hooks))
+	}
+	if cfg.ReplanAsync {
+		opts = append(opts,
+			app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log, app.WithQueueTimeout(cfg.ReplanTimeout))),
+			app.WithReplanRetries(cfg.ReplanMaxRetries),
+		)
+	}
+	svc := app.New(repo, eng, opts...)
+	// Re-enqueue replans left pending by a previous crash (async only — the
+	// in-memory queue loses scheduled work on restart; inline never does).
+	if cfg.ReplanAsync {
+		go func() {
+			n, err := svc.RecoverPending(ctx)
+			if err != nil {
+				log.Error("replan recovery failed", "err", err)
+				return
+			}
+			if n > 0 {
+				log.Info("recovered pending replans", "count", n)
+			}
+		}()
+	}
+
+	cleanup := func() {
+		// Drain in-flight async replanning first: completing replans emit events,
+		// which the webhook drain below then delivers.
+		sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		_ = svc.Shutdown(sctx)
+		cancel()
+		if hooks != nil {
+			wctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			_ = hooks.Shutdown(wctx)
+			cancel()
+		}
+		repo.Close()
+	}
+	return svc, cleanup, nil
+}
+
 // newServeCommand runs the REST API server.
 func newServeCommand() *cobra.Command {
 	return &cobra.Command{
@@ -220,59 +306,18 @@ func newServeCommand() *cobra.Command {
 			ctx, stop := signal.NotifyContext(cmd.Context(), syscall.SIGINT, syscall.SIGTERM)
 			defer stop()
 
-			repo, err := storage.Open(ctx, storage.Options{
-				DatabaseURL: cfg.DatabaseURL,
-				MaxConns:    cfg.DBMaxConns,
-			}, log)
-			if err != nil {
-				return err
-			}
-			defer repo.Close()
-
-			reg, err := buildRegistry(cfg)
-			if err != nil {
-				return err
-			}
-			pol, err := policy.Load(cfg.PolicyFile)
-			if err != nil {
-				return err
-			}
 			metrics := api.NewMetrics()
-			eng, err := newEngine(cfg, reg, pol, metrics)
+			svc, cleanup, err := buildService(ctx, cfg, log, metrics)
 			if err != nil {
 				return err
 			}
+			defer cleanup()
 
-			opts := []app.Option{app.WithMetrics(metrics), app.WithLogger(log), app.WithRegistry(reg)}
-			if cfg.ReplanAsync {
-				opts = append(opts,
-					app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log, app.WithQueueTimeout(cfg.ReplanTimeout))),
-					app.WithReplanRetries(cfg.ReplanMaxRetries),
-				)
-			}
-			svc := app.New(repo, eng, opts...)
-			// Re-enqueue replans left pending by a previous crash (async only — the
-			// in-memory queue loses scheduled work on restart; inline never does).
-			if cfg.ReplanAsync {
-				go func() {
-					n, err := svc.RecoverPending(ctx)
-					if err != nil {
-						log.Error("replan recovery failed", "err", err)
-						return
-					}
-					if n > 0 {
-						log.Info("recovered pending replans", "count", n)
-					}
-				}()
-			}
-			// Drain in-flight async replanning on shutdown.
-			defer func() {
-				sctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				defer cancel()
-				_ = svc.Shutdown(sctx)
-			}()
-
-			srv := api.New(cfg, log, svc, metrics)
+			// The MCP endpoint shares the live service: REST and MCP clients see
+			// the same goals, plans and versions.
+			mcpSrv := mcpserver.New(svc, version)
+			srv := api.New(cfg, log, svc, metrics,
+				api.WithMCP(mcp.NewStreamableHTTPHandler(func(*http.Request) *mcp.Server { return mcpSrv }, nil)))
 			return srv.Run(ctx)
 		},
 	}

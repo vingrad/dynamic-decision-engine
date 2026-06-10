@@ -404,6 +404,7 @@ dde signal --input examples/signal-update.json
 dde backtest --input internal/backtest/testdata/scenario.json
 dde migrate
 dde serve
+dde mcp
 dde version
 ```
 
@@ -446,6 +447,47 @@ Stores a signal and triggers replanning if the signal is material.
 ```http
 GET /v1/plans/{id}/versions
 ```
+
+---
+
+## MCP server
+
+The engine is also an **MCP server**: every use-case above is exposed as a
+Model Context Protocol tool, so MCP-capable agents (Claude Code, Claude
+Desktop, custom runtimes) can create goals, generate ranked plans, submit
+signals, record outcomes and audit the version history with zero integration
+code.
+
+```bash
+dde mcp        # stdio — point Claude Code/Desktop at {"command": "dde", "args": ["mcp"]}
+dde serve      # also mounts streamable HTTP MCP at http://localhost:8080/mcp
+```
+
+Both transports share the engine's semantics with REST; the `/mcp` endpoint
+shares the live service with the API.
+
+> 📖 **Tool reference, transports and agent-loop guidance:** [`docs/mcp.md`](docs/mcp.md)
+
+---
+
+## Webhooks
+
+The engine can push domain events (`goal.created`, `plan.created`,
+`signal.received`, `replan.completed`, `outcome.recorded`,
+`goal.status_changed`) to an HTTP endpoint as they happen — Slack bridges,
+n8n/Zapier flows and agent triggers react to decisions without polling.
+Off by default; enable with:
+
+```bash
+DDE_WEBHOOK_URL=https://example.com/hook \
+DDE_WEBHOOK_SECRET=s3cret \
+dde serve
+```
+
+Deliveries are best-effort with retries and an HMAC-SHA256 signature header
+(`X-DDE-Signature`) for receiver-side verification.
+
+> 📖 **Event types, envelope format, signature verification and delivery semantics:** [`docs/api.md`](docs/api.md#webhooks)
 
 ---
 
@@ -493,6 +535,8 @@ The initial core is implemented and tested:
 * Postgres persistence with ordered migrations
 * Prometheus metrics + Grafana dashboards
 * a minimal Next.js admin UI
+* webhook event notifications
+* an MCP server (stdio + streamable HTTP)
 
 More LLM providers, local / self-hosted inference, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
 
@@ -524,6 +568,8 @@ More LLM providers, local / self-hosted inference, authentication, richer scorin
 * [x] Async, FIFO-per-plan replanning + durable signal status + plan cache (TTL for finance)
 * [x] Per-domain metrics
 * [x] Pluggable external data sources (HTTP/MCP/AI-agent/read-model; deterministic pre-fetch, provenance-tracked)
+* [x] Webhook event notifications (best-effort, HMAC-signed, retried)
+* [x] MCP server (stdio via `dde mcp` + streamable HTTP at `/mcp`)
 * [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
 * [ ] Real market-data vendor (HTTP provider stub in place)
 * [ ] OpenTelemetry tracing

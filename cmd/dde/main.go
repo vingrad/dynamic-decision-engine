@@ -26,6 +26,7 @@ func main() {
 
 	root.AddCommand(
 		newServeCommand(),
+		newMCPCommand(),
 		newMigrateCommand(),
 		newEvaluateCommand(),
 		newSignalCommand(),
