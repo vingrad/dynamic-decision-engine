@@ -86,6 +86,12 @@ func ExpectedValue(winProb, winFrac, lossFrac float64) float64 {
 // EVScore maps a signed expected value into a [0,1] score centred at 0.5.
 func EVScore(ev float64) float64 { return clamp01(0.5 + ev) }
 
+// NeutralEVScore is the EV component used when the win probability carries no
+// information (flat prior, no signal hint). Scoring the volatility-scaled win/
+// loss magnitudes under a flat prior would reward the most volatile asset, so
+// the EV component stays neutral until a signal tilts the odds.
+const NeutralEVScore = 0.5
+
 // RiskScore maps volatility and drawdown into a [0,1] safety score (higher safer).
 func RiskScore(vol, maxDD float64) float64 {
 	return clamp01(1 - 0.5*vol - 0.5*maxDD)

@@ -91,10 +91,14 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 		}
 	}
 
+	// Per-goal constraints (drawdown_limit, risk_tolerance) tighten the
+	// configured risk budget before any sizing happens.
+	budget, budgetNote := finance.EffectiveRiskBudget(p.scoring.Risk, g.Context.Constraints)
+
 	tickers := candidateTickers(g, sig)
 	moves := make([]domain.RankedMove, 0, len(tickers))
 	for _, ticker := range tickers {
-		moves = append(moves, p.scoreThesis(ctx, ticker, g, sig, asOf))
+		moves = append(moves, p.scoreThesis(ctx, ticker, g, sig, asOf, budget, budgetNote))
 	}
 	if len(moves) == 0 {
 		moves = append(moves, insufficientDataMove(g))
@@ -135,7 +139,7 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 }
 
 // scoreThesis builds a fully-scored ranked move for one ticker.
-func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time) domain.RankedMove {
+func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domain.Goal, sig *finance.MarketSignal, asOf time.Time, budget finance.RiskBudget, budgetNote string) domain.RankedMove {
 	var (
 		vol, maxDD, avgDollarVol float64
 	)
@@ -147,10 +151,14 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 		maxDD = finance.MaxDrawdown(bars)
 	}
 
+	// A signal hint informs the win probability only for the ticker it names
+	// (an unnamed signal, e.g. macro, applies to every candidate).
 	winProb := 0.5
-	if sig != nil {
+	informed := false
+	if sig != nil && (sig.Ticker == "" || strings.EqualFold(sig.Ticker, ticker)) {
 		if wp, ok := sig.WinProbHint(); ok {
 			winProb = wp
+			informed = true
 		}
 	}
 	lossFrac := vol
@@ -166,24 +174,34 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 	// Intended position notional drives liquidity fit. When account equity is known
 	// it is equity * the concentration cap; otherwise fall back to a fixed notional.
 	notional := intendedNotional
-	if eq := p.scoring.Risk.AccountEquity; eq > 0 && p.scoring.Risk.MaxPositionPct > 0 {
-		notional = eq * p.scoring.Risk.MaxPositionPct
+	if eq := budget.AccountEquity; eq > 0 && budget.MaxPositionPct > 0 {
+		notional = eq * budget.MaxPositionPct
+	}
+
+	// With no signal hint the win probability is a flat prior, and the
+	// volatility-scaled EV would rank the most volatile name highest.
+	evScore := finance.NeutralEVScore
+	if informed {
+		evScore = finance.EVScore(finance.ExpectedValue(winProb, winFrac, lossFrac))
 	}
 
 	score := finance.ThesisScore{
 		Ticker:             ticker,
-		ExpectedValueScore: finance.EVScore(finance.ExpectedValue(winProb, winFrac, lossFrac)),
+		ExpectedValueScore: evScore,
 		RiskScore:          finance.RiskScore(vol, maxDD),
 		LiquidityFitScore:  finance.LiquidityFit(avgDollarVol, notional),
 		HorizonFitScore:    finance.HorizonFit(goalHorizonDays(g), signalWindow(sig)),
 	}
 	score.Composite = finance.Composite(score, p.scoring.Weights)
-	score.Position = finance.PositionFractionKelly(winProb, winFrac, lossFrac, p.scoring.Risk)
+	score.Position = finance.PositionFractionKelly(winProb, winFrac, lossFrac, budget)
 	score.Explain = fmt.Sprintf(
 		"ev=%.2f risk=%.2f liq=%.2f horizon=%.2f -> composite=%.2f; suggested size %.0f%% of equity (%s%s)",
 		score.ExpectedValueScore, score.RiskScore, score.LiquidityFitScore, score.HorizonFitScore,
 		score.Composite, score.Position.SuggestedFraction*100, score.Position.SizingMethod, capSuffix(score.Position.BindingCap),
 	)
+	if budgetNote != "" {
+		score.Explain += "; risk budget per goal constraints: " + budgetNote
+	}
 
 	impact, effort, risk := finance.MapToLevels(score)
 	confidence := finance.CompositeToConfidence(score.Composite)

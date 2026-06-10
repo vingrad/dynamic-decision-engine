@@ -59,7 +59,7 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 	}
 
 	rep := Report{Scenario: sc.Name}
-	var reacts, correctReacts, shouldKills int
+	var reacts, correctReacts, shouldKills, noiseEvents, noiseReacts int
 
 	for _, ev := range sc.Events {
 		h.sim.t = ev.At
@@ -85,6 +85,11 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 
 		if ev.ShouldKill {
 			shouldKills++
+		} else {
+			noiseEvents++
+			if res.Material {
+				noiseReacts++
+			}
 		}
 		if res.Material {
 			reacts++
@@ -102,27 +107,67 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 	if shouldKills > 0 {
 		rep.KillRecall = float64(correctReacts) / float64(shouldKills)
 	}
-	rep.HypotheticalPnL = h.hypotheticalPnL(ctx, current, start, h.sim.t)
+	rep.NoiseRobustness = 1
+	if noiseEvents > 0 {
+		rep.NoiseRobustness = 1 - float64(noiseReacts)/float64(noiseEvents)
+	}
+	h.scoreCalibration(ctx, &rep, h.sim.t)
+	finalTop, _ := topMove(current)
+	rep.HypotheticalPnL, _ = h.tickerReturn(ctx, tickerFromTitle(finalTop), start, h.sim.t)
 	return rep, nil
 }
 
-// hypotheticalPnL is an illustrative buy-and-hold return of the final top thesis's
-// ticker over the scenario window. It is NOT a strategy return.
-func (h *Harness) hypotheticalPnL(ctx context.Context, current domain.PlanVersion, from, to time.Time) float64 {
-	top, _ := topMove(current)
-	ticker := strings.TrimPrefix(top, "Thesis: ")
-	if ticker == top || ticker == "" {
-		return 0
+// scoreCalibration fills per-decision forward returns and the report's Brier
+// score. The forward window runs from each decision to the scenario end; it is
+// computed after the replay, so no future data ever reaches a decision. The
+// outcome label is 1 when the top thesis's forward return is positive, falling
+// back to the analyst kill label when no return is resolvable.
+func (h *Harness) scoreCalibration(ctx context.Context, rep *Report, end time.Time) {
+	if len(rep.Decisions) == 0 {
+		return
+	}
+	var sum float64
+	for i := range rep.Decisions {
+		d := &rep.Decisions[i]
+		fr, ok := h.tickerReturn(ctx, tickerFromTitle(d.TopMove), d.At, end)
+		if ok {
+			d.ForwardReturn = fr
+		}
+		var label float64
+		if (ok && fr > 0) || (!ok && !d.ShouldKill) {
+			label = 1
+		}
+		diff := d.TopConfidence - label
+		sum += diff * diff
+	}
+	rep.BrierScore = sum / float64(len(rep.Decisions))
+}
+
+// tickerReturn is the buy-and-hold return of one ticker over [from, to] from
+// point-in-time quotes. It reports ok=false when either quote is unavailable.
+func (h *Harness) tickerReturn(ctx context.Context, ticker string, from, to time.Time) (float64, bool) {
+	if ticker == "" {
+		return 0, false
 	}
 	startQ, err := h.provider.Quote(ctx, ticker, from)
 	if err != nil || startQ.Price == 0 {
-		return 0
+		return 0, false
 	}
 	endQ, err := h.provider.Quote(ctx, ticker, to)
 	if err != nil {
-		return 0
+		return 0, false
 	}
-	return (endQ.Price - startQ.Price) / startQ.Price
+	return (endQ.Price - startQ.Price) / startQ.Price, true
+}
+
+// tickerFromTitle extracts the ticker from a finance-planner move title
+// ("Thesis: ACME" -> "ACME"); non-thesis titles yield "".
+func tickerFromTitle(title string) string {
+	ticker := strings.TrimPrefix(title, "Thesis: ")
+	if ticker == title {
+		return ""
+	}
+	return ticker
 }
 
 func topMove(v domain.PlanVersion) (string, float64) {
