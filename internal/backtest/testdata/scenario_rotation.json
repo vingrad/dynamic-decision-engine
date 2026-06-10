@@ -1,0 +1,33 @@
+{
+  "name": "ACME to GLOBEX rotation",
+  "start_at": "2026-01-20T00:00:00Z",
+  "goal": {
+    "domain": "investing",
+    "objective": "Run a two-name book and rotate when a thesis breaks",
+    "metric": "calibrated conviction",
+    "context": {
+      "situation": "ACME is the higher-conviction name; GLOBEX is the bench.",
+      "assets": [
+        { "name": "ACME", "kind": "ticker", "description": "Primary thesis instrument" },
+        { "name": "GLOBEX", "kind": "ticker", "description": "Secondary thesis instrument" }
+      ],
+      "constraints": [
+        { "name": "max 10% drawdown", "kind": "drawdown_limit" }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-01-28T00:00:00Z",
+      "kind": "valuation_change",
+      "payload": { "ticker": "GLOBEX", "metric": "pe", "value": 24.0, "fair_value": 30.0, "gap_pct": 0.25 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-02-10T00:00:00Z",
+      "kind": "thesis_break",
+      "payload": { "ticker": "ACME", "reason": "core customer lost", "hard": true },
+      "should_kill": true
+    }
+  ]
+}

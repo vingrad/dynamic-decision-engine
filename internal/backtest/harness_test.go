@@ -58,10 +58,14 @@ func TestHarnessRun(t *testing.T) {
 		t.Errorf("expected positive illustrative pnl from fixtures, got %v", rep.HypotheticalPnL)
 	}
 
-	// The valuation_change event is labeled non-kill and produces no material
-	// replan, so the run never reacts to noise.
-	if rep.NoiseRobustness != 1 {
-		t.Errorf("expected noise robustness 1, got %v", rep.NoiseRobustness)
+	// The 30% valuation gap is material new information (the upside replaces the
+	// default reward:risk assumption), so the engine versions the plan on it.
+	// The event is labeled non-kill, so the noise metric records the reaction.
+	if rep.NoiseRobustness != 0 {
+		t.Errorf("expected noise robustness 0 (valuation gap is material), got %v", rep.NoiseRobustness)
+	}
+	if rep.KillPrecision != 0.5 {
+		t.Errorf("expected kill precision 0.5, got %v", rep.KillPrecision)
 	}
 	// Calibration: confidence should beat a coin flip (Brier 0.25) on this
 	// scenario — ACME rallies while held, and the broken thesis ends at zero
@@ -75,5 +79,26 @@ func TestHarnessRun(t *testing.T) {
 	}
 	if last.ForwardReturn != 0 {
 		t.Errorf("final decision has no forward window, expected 0, got %v", last.ForwardReturn)
+	}
+}
+
+func TestTerminalDecisionLabeledByAnalyst(t *testing.T) {
+	// A scenario's final decision has a zero-length forward window; its label
+	// must come from the analyst kill label, not read as an automatic failure.
+	sc := loadScenario(t, "testdata/scenario.json")
+	sc.Events = append(sc.Events[:1], TimelineEvent{
+		At:         sc.Events[1].At,
+		Kind:       "macro",
+		Payload:    map[string]any{"indicator": "pmi", "value": 51.0, "prior": 50.5},
+		ShouldKill: false,
+	})
+
+	rep, err := newHarness(t).Run(context.Background(), sc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	last := rep.Decisions[len(rep.Decisions)-1]
+	if last.Label != 1 {
+		t.Errorf("healthy terminal decision should be labeled 1 via the analyst label, got %v", last.Label)
 	}
 }

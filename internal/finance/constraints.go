@@ -33,13 +33,17 @@ func EffectiveRiskBudget(base RiskBudget, constraints []domain.Constraint) (Risk
 				continue
 			}
 			// A total loss of a single position must not exceed the stated
-			// drawdown limit, and a run of five stopped-out trades must stay
-			// within it.
+			// drawdown limit, a run of five stopped-out trades must stay
+			// within it, and the whole book's correlated capital at risk must
+			// not exceed it either.
 			if out.MaxPositionPct == 0 || dd < out.MaxPositionPct {
 				out.MaxPositionPct = dd
 			}
 			if perTrade := dd / 5; out.MaxPortfolioRiskPct == 0 || perTrade < out.MaxPortfolioRiskPct {
 				out.MaxPortfolioRiskPct = perTrade
+			}
+			if out.MaxAggregateRiskPct <= 0 || dd < out.MaxAggregateRiskPct {
+				out.MaxAggregateRiskPct = dd
 			}
 			notes = append(notes, fmt.Sprintf("drawdown_limit %.0f%%", dd*100))
 		case "risk_tolerance":

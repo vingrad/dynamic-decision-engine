@@ -13,6 +13,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/spf13/cobra"
+	"gopkg.in/yaml.v3"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/api"
 	"github.com/vingrad/dynamic-decision-engine/internal/app"
@@ -20,6 +21,7 @@ import (
 	"github.com/vingrad/dynamic-decision-engine/internal/config"
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/engine"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/logging"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
@@ -185,14 +187,21 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		}
 	}
 	globalBase := newPlanner(cfg)
-	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
+	baseFor := domainBaseResolver(cfg, pol, globalBase)
+	deps := wire.PlannerDeps{
 		Base:         globalBase,
-		BaseFor:      domainBaseResolver(cfg, pol, globalBase),
+		BaseFor:      baseFor,
 		DataSources:  marketDataSources(provider),
 		Cache:        cache,
 		FinanceCache: financeCache,
 		CacheObs:     cacheObs,
-	})
+	}
+	// Hybrid mode narrates numeric theses with the investing domain's text planner;
+	// the numbers stay authoritative.
+	if cfg.FinanceHybrid {
+		deps.FinanceInner = baseFor("investing")
+	}
+	router := wire.BuildPlannerRouter(reg, pol, deps)
 	opts := []engine.Option{
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
@@ -530,6 +539,55 @@ func newBacktestCommand() *cobra.Command {
 	cmd.Flags().StringVar(&input, "input", "", "path to a backtest scenario JSON file (required)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the report as JSON")
 	_ = cmd.MarkFlagRequired("input")
+	return cmd
+}
+
+// newCalibrateCommand fits a confidence-calibration curve from the outcomes
+// recorded against a domain's goals and prints the policy snippet that installs
+// it (DDE_POLICY). It reads the production store, so DATABASE_URL should point
+// at it; the default in-memory store yields no samples.
+func newCalibrateCommand() *cobra.Command {
+	var domainKey string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "calibrate",
+		Short: "Fit a confidence-calibration curve from recorded outcomes (prints a policy snippet)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			log := logging.New(cfg.LogLevel, cfg.LogFormat)
+			svc, cleanup, err := buildService(cmd.Context(), cfg, log, api.NewMetrics())
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			samples, err := svc.CalibrationSamples(cmd.Context(), domainKey)
+			if err != nil {
+				return err
+			}
+			curve := finance.FitCalibration(samples)
+			if len(samples) < 10 {
+				fmt.Fprintf(os.Stderr, "warning: only %d decisive outcomes; the curve is weak evidence — keep recording outcomes\n", len(samples))
+			}
+			snippet := policy.Policy{Domains: map[string]policy.DomainPolicy{
+				domainKey: {Calibration: &curve},
+			}}
+			if asJSON {
+				return printJSON(snippet)
+			}
+			out, err := yaml.Marshal(snippet)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stdout, "# fitted from %d decisive outcomes for domain %q\n%s", len(samples), domainKey, out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&domainKey, "domain", "investing", "domain whose outcomes to calibrate against")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the policy snippet as JSON")
 	return cmd
 }
 

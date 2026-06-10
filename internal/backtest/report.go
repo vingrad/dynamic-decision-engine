@@ -14,10 +14,19 @@ type Decision struct {
 	Reason        string    `json:"reason"`
 	TopMove       string    `json:"top_move"`
 	TopConfidence float64   `json:"top_confidence"`
-	ShouldKill    bool      `json:"should_kill"`
+	// TopRawConfidence is the top move's pre-calibration confidence (equal to
+	// TopConfidence when no curve is installed). Calibration fitting and
+	// evaluation always operate on this value, so the fit domain matches the
+	// domain a freshly installed curve is applied to.
+	TopRawConfidence float64 `json:"top_raw_confidence,omitempty"`
+	ShouldKill       bool    `json:"should_kill"`
 	// ForwardReturn is the top thesis ticker's return from decision time to the
 	// end of the scenario (evaluation-only attribution; never a planner input).
 	ForwardReturn float64 `json:"forward_return"`
+	// Label is the realized outcome the Brier score compares confidence against:
+	// 1 when the top thesis's forward return was positive (falling back to the
+	// analyst kill label), else 0. Evaluation-only.
+	Label float64 `json:"label"`
 }
 
 // Report summarises a backtest run. The metrics describe decision/replanning

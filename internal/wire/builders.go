@@ -38,14 +38,19 @@ func buildFinancePlanner(d pack.Descriptor, pol policy.Policy, deps PlannerDeps)
 		return nil, nil // no market data wired → decline to guided fallback
 	}
 
-	fin := llm.Planner(llm.NewFinancePlanner(llm.FinanceConfig{
-		Provider:    provider,
-		Scoring:     effectiveScoring(d, pol),
-		Inner:       deps.FinanceInner,
-		Now:         deps.FinanceNow,
-		PackID:      d.ID,
-		PackVersion: d.Version,
-	}))
+	cfg := llm.FinanceConfig{
+		Provider:       provider,
+		Scoring:        effectiveScoring(d, pol),
+		Inner:          deps.FinanceInner,
+		Now:            deps.FinanceNow,
+		PackID:         d.ID,
+		PackVersion:    d.Version,
+		PromptTemplate: d.PromptTemplate,
+	}
+	if dp, ok := pol.For(d.ID); ok && dp.Calibration != nil {
+		cfg.Calibration = dp.Calibration
+	}
+	fin := llm.Planner(llm.NewFinancePlanner(cfg))
 	// Finance is cached only via a TTL cache so plans refresh as market data moves;
 	// never via the non-expiring text cache.
 	if deps.FinanceCache != nil {

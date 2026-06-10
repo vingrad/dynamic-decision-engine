@@ -31,6 +31,7 @@ func main() {
 		newEvaluateCommand(),
 		newSignalCommand(),
 		newBacktestCommand(),
+		newCalibrateCommand(),
 		newVersionCommand(),
 	)
 

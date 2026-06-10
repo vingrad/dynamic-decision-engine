@@ -1,0 +1,50 @@
+{
+  "name": "ACME noise gauntlet",
+  "start_at": "2026-01-20T00:00:00Z",
+  "goal": {
+    "domain": "investing",
+    "objective": "Hold an ACME position through routine market chatter",
+    "metric": "calibrated conviction",
+    "context": {
+      "situation": "ACME thesis intact; the tape is noisy.",
+      "assets": [
+        { "name": "ACME", "kind": "ticker", "description": "Primary thesis instrument" }
+      ],
+      "constraints": [
+        { "name": "max 10% drawdown", "kind": "drawdown_limit" }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-01-22T00:00:00Z",
+      "kind": "macro",
+      "payload": { "indicator": "pmi", "value": 51.0, "prior": 50.5 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-01-27T00:00:00Z",
+      "kind": "price_move",
+      "payload": { "ticker": "ACME", "pct_change": -0.02, "from_price": 106.0, "to_price": 103.9, "window_days": 5 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-01-29T00:00:00Z",
+      "kind": "earnings",
+      "payload": { "ticker": "ACME", "eps_actual": 1.42, "eps_estimate": 1.40, "surprise": 0.014 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-02-03T00:00:00Z",
+      "kind": "macro",
+      "payload": { "indicator": "pmi", "value": 50.8, "prior": 51.0 },
+      "should_kill": false
+    },
+    {
+      "at": "2026-02-10T00:00:00Z",
+      "kind": "thesis_break",
+      "payload": { "ticker": "ACME", "reason": "core customer lost", "hard": true },
+      "should_kill": true
+    }
+  ]
+}

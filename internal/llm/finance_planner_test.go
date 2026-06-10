@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 )
 
@@ -138,20 +139,37 @@ func TestFinancePlannerUntargetedThesisBreak(t *testing.T) {
 
 func TestFinancePlannerUsesHorizon(t *testing.T) {
 	p := financeTestPlanner(t)
-	// A goal with a stated horizon and a signal carrying a matching window should
-	// score horizon fit above the neutral 0.5 (proving it is no longer hardcoded).
-	g := investingGoal()
-	g.Context.Constraints = append(g.Context.Constraints, domain.Constraint{Name: "30 day horizon", Kind: "time_horizon"})
-	res, err := p.GeneratePlan(context.Background(), PlanRequest{
-		Goal:          g,
-		SignalKind:    "price_move",
-		SignalPayload: map[string]any{"kind": "price_move", "ticker": "ACME", "pct_change": -0.1, "window_days": 30},
-	})
+	// Horizon fit compares the goal's stated horizon against the vol-implied time
+	// for the thesis to traverse its upside. ACME's fixture volatility implies
+	// roughly a year to a 2:1 move, so a 1-year goal fits nearly perfectly and a
+	// 30-day goal fits poorly.
+	yearGoal := investingGoal()
+	yearGoal.Context.Constraints = append(yearGoal.Context.Constraints, domain.Constraint{Name: "1 year horizon", Kind: "time_horizon"})
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: yearGoal})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(res.RankedMoves[0].Rationale, "horizon=1.00") {
-		t.Errorf("expected perfect horizon fit (1.00) for matching 30d horizon/window, got rationale: %q", res.RankedMoves[0].Rationale)
+	if !strings.Contains(res.RankedMoves[0].Rationale, "horizon=0.99") {
+		t.Errorf("1-year goal should fit ACME's vol-implied horizon (~1y), got rationale: %q", res.RankedMoves[0].Rationale)
+	}
+
+	shortGoal := investingGoal()
+	shortGoal.Context.Constraints = append(shortGoal.Context.Constraints, domain.Constraint{Name: "30 day horizon", Kind: "time_horizon"})
+	short, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: shortGoal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(short.RankedMoves[0].Rationale, "horizon=0.25") {
+		t.Errorf("30-day goal should fit poorly (~0.25), got rationale: %q", short.RankedMoves[0].Rationale)
+	}
+
+	// Without a stated horizon the component is neutral.
+	plain, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(plain.RankedMoves[0].Rationale, "horizon=0.50") {
+		t.Errorf("no stated horizon should be neutral, got rationale: %q", plain.RankedMoves[0].Rationale)
 	}
 }
 
@@ -199,24 +217,58 @@ func TestFinancePlannerHonorsRiskConstraints(t *testing.T) {
 	}
 }
 
-func TestFinancePlannerNeutralEVWithoutSignal(t *testing.T) {
+// winProbOf extracts the "(p=X.XX)" win probability from a move rationale.
+func winProbOf(t *testing.T, m domain.RankedMove) string {
+	t.Helper()
+	match := regexp.MustCompile(`\(p=(\d\.\d\d)\)`).FindStringSubmatch(m.Rationale)
+	if match == nil {
+		t.Fatalf("no win probability in rationale: %q", m.Rationale)
+	}
+	return match[1]
+}
+
+func TestFinancePlannerPriorInformsEV(t *testing.T) {
 	p := financeTestPlanner(t)
 	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
 	if err != nil {
 		t.Fatal(err)
 	}
-	// With no signal the win probability is a flat prior; the EV component must
-	// be neutral rather than rewarding the more volatile ticker.
+	// With no signal, the fundamentals prior tilts the odds: ACME (PE 14, positive
+	// EPS) above the base rate, GLOBEX (PE 30, PB 5) below it.
+	probs := map[string]string{}
 	for _, m := range res.RankedMoves {
-		if !strings.Contains(m.Rationale, "ev=0.50") {
-			t.Errorf("%s: flat-prior EV should be neutral 0.50, rationale: %q", m.Key, m.Rationale)
-		}
+		probs[m.Key] = winProbOf(t, m)
+	}
+	if probs["thesis:ACME"] != "0.54" {
+		t.Errorf("ACME prior = %s, want 0.54 (cheap PE +0.03, positive EPS +0.01)", probs["thesis:ACME"])
+	}
+	if probs["thesis:GLOBEX"] != "0.47" {
+		t.Errorf("GLOBEX prior = %s, want 0.47 (rich PE -0.02, rich PB -0.02, positive EPS +0.01)", probs["thesis:GLOBEX"])
+	}
+}
+
+func TestFinancePlannerNeutralEVWithoutInformation(t *testing.T) {
+	p := financeTestPlanner(t)
+	// A ticker with no fundamentals and no price history carries no information:
+	// the EV component must stay neutral rather than rewarding volatility.
+	g := investingGoal()
+	g.Context.Assets = []domain.Asset{{Name: "ZZZ", Kind: "ticker"}}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.RankedMoves[0].Rationale, "ev=0.50 (p=0.50)") {
+		t.Errorf("uninformed thesis should have neutral EV, rationale: %q", res.RankedMoves[0].Rationale)
 	}
 }
 
 func TestFinancePlannerHintAppliesOnlyToNamedTicker(t *testing.T) {
 	p := financeTestPlanner(t)
-	res, err := p.GeneratePlan(context.Background(), PlanRequest{
+	base, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	hinted, err := p.GeneratePlan(context.Background(), PlanRequest{
 		Goal:       investingGoal(), // ACME and GLOBEX
 		SignalKind: "valuation_change",
 		SignalPayload: map[string]any{
@@ -227,18 +279,23 @@ func TestFinancePlannerHintAppliesOnlyToNamedTicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range res.RankedMoves {
-		neutral := strings.Contains(m.Rationale, "ev=0.50")
-		switch m.Key {
-		case "thesis:ACME":
-			if neutral {
-				t.Errorf("ACME should be tilted by its valuation hint: %q", m.Rationale)
-			}
-		case "thesis:GLOBEX":
-			if !neutral {
-				t.Errorf("GLOBEX must not inherit ACME's hint: %q", m.Rationale)
+	prob := func(res PlanResult, key string) string {
+		t.Helper()
+		for _, m := range res.RankedMoves {
+			if m.Key == key {
+				return winProbOf(t, m)
 			}
 		}
+		t.Fatalf("move %q missing", key)
+		return ""
+	}
+	// The hint moves ACME's win probability (averaged with its prior) but must
+	// not leak onto GLOBEX, whose prior stays as-is.
+	if prob(hinted, "thesis:ACME") == prob(base, "thesis:ACME") {
+		t.Error("ACME win probability should move on its valuation hint")
+	}
+	if got, want := prob(hinted, "thesis:GLOBEX"), prob(base, "thesis:GLOBEX"); got != want {
+		t.Errorf("GLOBEX must not inherit ACME's hint: %s vs %s", got, want)
 	}
 }
 
@@ -255,6 +312,199 @@ func TestFinancePlannerConcurrent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// narrationRecorder captures the request it receives and returns a fixed summary.
+type narrationRecorder struct {
+	req PlanRequest
+}
+
+func (r *narrationRecorder) Name() string { return "recording" }
+
+func (r *narrationRecorder) GeneratePlan(_ context.Context, req PlanRequest) (PlanResult, error) {
+	r.req = req
+	return PlanResult{
+		Summary:    "Narrated thesis colour.",
+		Invocation: domain.ModelInvocation{Model: "test-model"},
+	}, nil
+}
+
+func TestFinancePlannerHybridNarration(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	inner := &narrationRecorder{}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	p := NewFinancePlanner(FinanceConfig{
+		Provider:       prov,
+		Inner:          inner,
+		Now:            func() time.Time { return asOf },
+		PackVersion:    "1",
+		PromptTemplate: "DOMAIN: INVESTING test guidance",
+	})
+
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal(), SignalNote: "quarterly review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The narrator receives the pack guidance and the authoritative scores.
+	if inner.req.SystemPromptOverride != "DOMAIN: INVESTING test guidance" {
+		t.Errorf("inner should receive the pack template, got %q", inner.req.SystemPromptOverride)
+	}
+	if !strings.Contains(inner.req.SignalNote, "quarterly review") {
+		t.Errorf("inner note should carry the signal note: %q", inner.req.SignalNote)
+	}
+	if !strings.Contains(inner.req.SignalNote, "Thesis: ACME") || !strings.Contains(inner.req.SignalNote, "ev=") {
+		t.Errorf("inner note should carry the numeric scores: %q", inner.req.SignalNote)
+	}
+
+	// Narration lands in reasoning; provenance records the narrator.
+	if !strings.Contains(res.Provenance.ReasoningSummary, "Narrated thesis colour.") {
+		t.Errorf("narration missing from reasoning: %q", res.Provenance.ReasoningSummary)
+	}
+	if len(res.Provenance.Contributors) != 1 || res.Provenance.Contributors[0].Role != "narrator" || res.Provenance.Contributors[0].Model != "test-model" {
+		t.Errorf("expected a narrator contributor, got %+v", res.Provenance.Contributors)
+	}
+
+	// Numbers are untouched by the narrator: same moves as the pure numeric run.
+	numeric, err := financeTestPlanner(t).GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal(), SignalNote: "quarterly review"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.RankedMoves) != len(numeric.RankedMoves) {
+		t.Fatal("hybrid must not change the move set")
+	}
+	for i := range res.RankedMoves {
+		if res.RankedMoves[i].Confidence != numeric.RankedMoves[i].Confidence || res.RankedMoves[i].Title != numeric.RankedMoves[i].Title {
+			t.Errorf("hybrid changed numbers at %d: %+v vs %+v", i, res.RankedMoves[i], numeric.RankedMoves[i])
+		}
+	}
+}
+
+func TestFinancePlannerAppliesCalibration(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	// A constant curve maps every stated confidence onto the observed 0.42.
+	curve := &finance.CalibrationCurve{Bins: []finance.CalibrationBin{{Mid: 0.5, Rate: 0.42, N: 20}}}
+	p := NewFinancePlanner(FinanceConfig{
+		Provider:    prov,
+		Now:         func() time.Time { return asOf },
+		Calibration: curve,
+	})
+
+	// List GLOBEX first so input order disagrees with composite order: a flat
+	// curve collapses calibrated confidences, and ranking must fall back to the
+	// raw composite, never to asset listing order.
+	g := investingGoal()
+	g.Context.Assets = []domain.Asset{
+		{Name: "GLOBEX", Kind: "ticker"},
+		{Name: "ACME", Kind: "ticker"},
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: g})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range res.RankedMoves {
+		if m.Confidence != 0.42 {
+			t.Errorf("%s: calibrated confidence = %v, want 0.42", m.Key, m.Confidence)
+		}
+		// The pre-calibration confidence is preserved so refits stay in the
+		// raw domain.
+		if m.RawConfidence == 0.42 || m.RawConfidence == 0 {
+			t.Errorf("%s: raw confidence should carry the uncalibrated value, got %v", m.Key, m.RawConfidence)
+		}
+	}
+	if res.RankedMoves[0].Key != "thesis:ACME" {
+		t.Errorf("flat curve must not collapse ranking onto listing order; top = %s", res.RankedMoves[0].Key)
+	}
+	if res.RankedMoves[0].RawConfidence <= res.RankedMoves[1].RawConfidence {
+		t.Errorf("rank should follow raw confidence: %v vs %v", res.RankedMoves[0].RawConfidence, res.RankedMoves[1].RawConfidence)
+	}
+}
+
+func TestFinancePlannerSmallValuationGapDoesNotChurn(t *testing.T) {
+	p := financeTestPlanner(t)
+	base, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A near-zero fair-value gap ("price is about right") must not replace the
+	// thesis upside — that would slash EV and version the plan on noise. It may
+	// only nudge the win probability.
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{
+		Goal:       investingGoal(),
+		SignalKind: "valuation_change",
+		SignalPayload: map[string]any{
+			"kind": "valuation_change", "ticker": "ACME", "metric": "pe",
+			"value": 14.0, "fair_value": 14.1, "gap_pct": 0.007,
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var baseConf, gotConf float64
+	for _, m := range base.RankedMoves {
+		if m.Key == "thesis:ACME" {
+			baseConf = m.Confidence
+		}
+	}
+	for _, m := range res.RankedMoves {
+		if m.Key == "thesis:ACME" {
+			gotConf = m.Confidence
+		}
+	}
+	if diff := gotConf - baseConf; diff > 0.05 || diff < -0.05 {
+		t.Errorf("near-noise valuation tick moved confidence by %v (%v -> %v); must stay under the 0.05 materiality threshold", diff, baseConf, gotConf)
+	}
+}
+
+func TestFinancePlannerPortfolioRiskCap(t *testing.T) {
+	prov, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	asOf := time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC)
+	scoring := finance.DefaultScoringConfig()
+	scoring.Risk.MaxAggregateRiskPct = 0.005 // tighter than the two theses' combined risk
+	p := NewFinancePlanner(FinanceConfig{
+		Provider: prov,
+		Scoring:  scoring,
+		Now:      func() time.Time { return asOf },
+	})
+
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// With the default (looser) aggregate cap the note must not appear and
+	// sizes stay unscaled.
+	base, err := financeTestPlanner(t).GeneratePlan(context.Background(), PlanRequest{Goal: investingGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range base.RankedMoves {
+		if strings.Contains(m.Rationale, "portfolio risk cap") {
+			t.Errorf("%s: default cap should not bind on fixtures, rationale: %q", m.Key, m.Rationale)
+		}
+	}
+
+	for i, m := range res.RankedMoves {
+		if !strings.Contains(m.Rationale, "portfolio risk cap binds: sizes scaled by") ||
+			!strings.Contains(m.Rationale, "capped by portfolio_risk") {
+			t.Errorf("%s: aggregate cap should bind and be named, rationale: %q", m.Key, m.Rationale)
+		}
+		// The STATED size must be the scaled one — the cap is enforced in the
+		// numbers a consumer reads, not in prose.
+		if got, unscaled := suggestedSize(t, m), suggestedSize(t, base.RankedMoves[i]); got >= unscaled {
+			t.Errorf("%s: stated size %v%% should be scaled below the uncapped %v%%", m.Key, got, unscaled)
+		}
+	}
 }
 
 func TestFinancePlannerNoTickers(t *testing.T) {

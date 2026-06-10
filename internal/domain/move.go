@@ -9,10 +9,15 @@ type RankedMove struct {
 	// Key is a stable, semantic identifier for the move that survives rewording of
 	// the display Title. Materiality is judged on Key (falling back to a normalised
 	// Title when empty), so re-phrasing a move does not read as a changed plan.
-	Key            string     `json:"key,omitempty"`
-	Title          string     `json:"title"`
-	Description    string     `json:"description"`
-	Confidence     float64    `json:"confidence"` // 0.0 - 1.0
+	Key         string  `json:"key,omitempty"`
+	Title       string  `json:"title"`
+	Description string  `json:"description"`
+	Confidence  float64 `json:"confidence"` // 0.0 - 1.0
+	// RawConfidence is the confidence before any calibration curve is applied
+	// (equal to Confidence when no curve is installed; 0 means "not recorded" on
+	// plans that predate the field). Calibration is refit against this value so
+	// successive fits stay in the same domain.
+	RawConfidence  float64    `json:"raw_confidence,omitempty"`
 	ExpectedImpact Level      `json:"expected_impact"`
 	Effort         Level      `json:"effort"`
 	Risk           Level      `json:"risk"`
