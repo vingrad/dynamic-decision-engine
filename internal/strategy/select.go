@@ -229,6 +229,31 @@ func filteredIDs(scored []Scored) []string {
 	return out
 }
 
+// ReWeigh picks the winning index among RECORDED candidates under a new set
+// of outcome weights — the offline evaluation primitive behind the strategy
+// walk-forward: it re-runs the weight mapping over a past competition without
+// re-running any planner. Filtered candidates stay out; ties break on the
+// candidate's recorded top confidence, then on recorded (canonical) order.
+// Returns -1 when no admissible candidate was recorded.
+func ReWeigh(cands []domain.StrategyCandidate, weights map[string]float64, regime string) int {
+	opts := Options{Weights: weights, Regime: regime}
+	best := -1
+	var bestW float64
+	for i, c := range cands {
+		if c.Filtered {
+			continue
+		}
+		w := applyWeight(c.UtilityScore, weightFor(opts, c.StrategyID))
+		switch {
+		case best < 0, w > bestW:
+			best, bestW = i, w
+		case w == bestW && c.TopConfidence > cands[best].TopConfidence:
+			best = i
+		}
+	}
+	return best
+}
+
 // DisagreementPenalty converts strategy disagreement into a confidence
 // haircut, quantized to steps of 0.05 — the investing pack's materiality
 // ConfidenceDelta — so disagreement either leaves stated confidence alone or

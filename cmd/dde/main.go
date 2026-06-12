@@ -32,6 +32,7 @@ func main() {
 		newSignalCommand(),
 		newBacktestCommand(),
 		newCalibrateCommand(),
+		newStrategyFitCommand(),
 		newVersionCommand(),
 	)
 

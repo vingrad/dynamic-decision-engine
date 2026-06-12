@@ -83,6 +83,8 @@ func (h *Harness) Run(ctx context.Context, sc Scenario) (Report, error) {
 			TopRawConfidence: top.RawConfidence,
 			ShouldKill:       ev.ShouldKill,
 			SelectedStrategy: res.Candidate.Provenance.SelectedStrategy,
+			Regime:           res.Candidate.Provenance.Regime,
+			Candidates:       res.Candidate.Provenance.StrategyCandidates,
 		})
 		if s := res.Candidate.Provenance.SelectedStrategy; s != "" {
 			if rep.StrategyShare == nil {

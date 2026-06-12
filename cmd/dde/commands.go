@@ -610,6 +610,56 @@ func newCalibrateCommand() *cobra.Command {
 	return cmd
 }
 
+// newStrategyFitCommand fits per-strategy selection weights from the outcomes
+// recorded against a domain's goals and prints the policy snippet that installs
+// them — the strategy analogue of `dde calibrate`. Only plans produced by the
+// strategy selector (provenance carries selected_strategy) contribute.
+func newStrategyFitCommand() *cobra.Command {
+	var domainKey string
+	var asJSON bool
+	cmd := &cobra.Command{
+		Use:   "strategy-fit",
+		Short: "Fit strategy-selection weights from recorded outcomes (prints a policy snippet)",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			cfg, err := config.Load()
+			if err != nil {
+				return err
+			}
+			log := logging.New(cfg.LogLevel, cfg.LogFormat)
+			svc, cleanup, err := buildService(cmd.Context(), cfg, log, api.NewMetrics())
+			if err != nil {
+				return err
+			}
+			defer cleanup()
+
+			samples, err := svc.StrategySamples(cmd.Context(), domainKey)
+			if err != nil {
+				return err
+			}
+			weights := finance.FitStrategyWeights(samples)
+			if len(samples) < 10 {
+				fmt.Fprintf(os.Stderr, "warning: only %d decisive outcomes with a selected strategy; the weights are weak evidence — keep recording outcomes\n", len(samples))
+			}
+			snippet := policy.Policy{Domains: map[string]policy.DomainPolicy{
+				domainKey: {Strategy: &policy.StrategySelection{Weights: weights}},
+			}}
+			if asJSON {
+				return printJSON(snippet)
+			}
+			out, err := yaml.Marshal(snippet)
+			if err != nil {
+				return err
+			}
+			fmt.Fprintf(os.Stdout, "# fitted from %d decisive outcomes for domain %q (omitted buckets mean weight 1.0)\n%s",
+				len(samples), domainKey, out)
+			return nil
+		},
+	}
+	cmd.Flags().StringVar(&domainKey, "domain", "investing", "domain whose outcomes to fit strategy weights against")
+	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the policy snippet as JSON")
+	return cmd
+}
+
 // newMemoryService builds an in-memory, offline service for the CLI commands
 // (evaluate, signal), reusing the production wiring — registry, planner router
 // (incl. the finance planner on offline fixtures) and per-domain evaluators — with

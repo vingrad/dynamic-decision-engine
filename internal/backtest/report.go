@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
 
 // Decision records one step of the replay.
@@ -30,6 +32,11 @@ type Decision struct {
 	// SelectedStrategy is the strategy lens that won this decision's candidate
 	// plan (Provenance.SelectedStrategy); empty when no selector is in play.
 	SelectedStrategy string `json:"selected_strategy,omitempty"`
+	// Regime is the market-regime label recorded at decision time.
+	Regime string `json:"regime,omitempty"`
+	// Candidates is the recorded strategy competition (evaluation-only): the
+	// walk-forward re-weighs these after the fact without re-running the engine.
+	Candidates []domain.StrategyCandidate `json:"candidates,omitempty"`
 }
 
 // Report summarises a backtest run. The metrics describe decision/replanning
