@@ -82,3 +82,42 @@ func TestValidateSeverities(t *testing.T) {
 		t.Errorf("investing should not warn when risk+horizon present, got %+v", iss)
 	}
 }
+
+func TestValidateStrategies(t *testing.T) {
+	strat := func(id string, regimes ...string) StrategyDescriptor {
+		return StrategyDescriptor{ID: id, Name: id, Regimes: regimes}
+	}
+	cases := []struct {
+		name string
+		d    Descriptor
+		ok   bool
+	}{
+		{"no strategies", Descriptor{ID: "growth"}, true},
+		{"valid set", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a"), strat("b", "trend")}}, true},
+		{"single gated strategy", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a", "trend")}}, true},
+		{"generic may not compete", Descriptor{ID: DefaultDomain, Strategies: []StrategyDescriptor{strat("a"), strat("b")}}, false},
+		{"empty id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat(" "), strat("b")}}, false},
+		{"duplicate id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a"), strat("a")}}, false},
+		{"all strategies gated", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a", "trend"), strat("b", "range")}}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			err := tc.d.ValidateStrategies()
+			if (err == nil) != tc.ok {
+				t.Errorf("ValidateStrategies() = %v, want ok=%v", err, tc.ok)
+			}
+		})
+	}
+}
+
+// TestBuiltInPacksValidStrategies: every built-in descriptor's strategy
+// declaration must satisfy the pure-data invariants.
+func TestBuiltInPacksValidStrategies(t *testing.T) {
+	reg := NewRegistry()
+	for _, id := range reg.IDs() {
+		d, _ := reg.Get(id)
+		if err := d.ValidateStrategies(); err != nil {
+			t.Errorf("pack %q: %v", id, err)
+		}
+	}
+}

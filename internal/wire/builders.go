@@ -2,6 +2,8 @@ package wire
 
 import (
 	"context"
+	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -33,26 +35,17 @@ var plannerBuilders = map[string]PlannerBuilder{
 	"finance": buildFinancePlanner,
 }
 
-// buildFinancePlanner builds the numeric finance planner for a "finance"-kind
-// domain. It pulls the "marketdata" data source; if it is absent or of the wrong
-// type, it declines (returns nil) so the domain falls back to the guided text
-// planner — matching the prior "investing without a provider" behaviour. When
-// the descriptor declares strategies and policy enables selection, it builds
-// one child planner per strategy and composes them under a selector instead.
+// buildFinancePlanner builds the SINGLE blended numeric finance planner for a
+// "finance"-kind domain — strategy competition is assembled separately and
+// generically (buildStrategySelector), so this builder only serves domains
+// (or deployments) running without selection. It pulls the "marketdata" data
+// source; if it is absent or of the wrong type, it declines (returns nil) so
+// the domain falls back to the guided text planner — matching the prior
+// "investing without a provider" behaviour.
 func buildFinancePlanner(d pack.Descriptor, pol policy.Policy, deps PlannerDeps) (llm.Planner, error) {
 	provider, ok := deps.DataSources[marketDataKey].(marketdata.Provider)
 	if !ok {
 		return nil, nil // no market data wired → decline to guided fallback
-	}
-
-	if strategies := activeStrategies(d, pol); selectionEnabled(d, pol) && len(strategies) >= 2 {
-		return buildFinanceSelector(d, pol, deps, provider, strategies)
-	} else if selectionEnabled(d, pol) && len(strategies) == 1 {
-		// Exactly one strategy left (policy disabled the rest): pin that lens as
-		// the single planner — no competition, but the lens's prior tilts and
-		// scoring overlay still apply. This is how a fixed-strategy baseline is
-		// expressed (backtest comparisons, or an operator pinning a lens).
-		return buildFinanceChild(d, pol, deps, provider, strategies[0], deps.FinanceInner), nil
 	}
 
 	cfg := llm.FinanceConfig{
@@ -77,14 +70,14 @@ func buildFinancePlanner(d pack.Descriptor, pol policy.Policy, deps PlannerDeps)
 }
 
 // selectionEnabled reports whether the strategy competition is on for a domain.
-// An explicit policy setting wins; otherwise a domain that declares strategies
-// competes them by default — the investing pack's backtest gates
-// (TestStrategyMatrixGates) earned the flip, and policy remains the off switch.
+// An explicit policy setting wins; otherwise the PACK's declared default
+// decides — a default-on flip must be earned per domain (investing earned it
+// via TestStrategyMatrixGates), never inherited just by declaring strategies.
 func selectionEnabled(d pack.Descriptor, pol policy.Policy) bool {
 	if dp, ok := pol.For(d.ID); ok && dp.Strategy != nil && dp.Strategy.Enabled != nil {
 		return *dp.Strategy.Enabled
 	}
-	return len(d.Strategies) > 0
+	return d.SelectionDefaultOn
 }
 
 // activeStrategies returns the descriptor's strategies minus any the policy
@@ -106,28 +99,166 @@ func activeStrategies(d pack.Descriptor, pol policy.Policy) []pack.StrategyDescr
 	return out
 }
 
-// buildFinanceSelector assembles the competing finance children — one per
-// strategy lens, each caching independently (the strategy ID is in the child's
-// name and so its cache key) — under a SelectorPlanner. The hybrid narrator
-// attaches to the selector, never to children, so narration runs once on the
-// winner. The selector itself is never cached: selection is cheap and pure,
-// and its hysteresis input (the incumbent strategy) must stay live.
-func buildFinanceSelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, provider marketdata.Provider, strategies []pack.StrategyDescriptor) (llm.Planner, error) {
-	dp, hasPolicy := pol.For(d.ID)
+// StrategyKit is everything a planner kind contributes to a strategy
+// competition: how to build one strategy child, how to classify the context
+// that gates strategies (with the CLOSED set of labels strategies may
+// declare), and whether the kind's data dependency is wired at all. The kit
+// keeps child-building and classification together because they share the
+// same data dependency — the finance classifier reads the same market data
+// the finance children do.
+type StrategyKit struct {
+	// BuildChild builds one strategy child. inner is the optional narrator
+	// (nil for competing children — narration runs once on the winner, inside
+	// the selector — and the kit's narrator for a pinned single strategy).
+	BuildChild func(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, s pack.StrategyDescriptor, inner llm.Planner) (llm.Planner, error)
+	// BuildClassifier returns the context classifier and the labels strategies
+	// may declare. A nil RegimeFn means no gating for this kind.
+	BuildClassifier func(d pack.Descriptor, pol policy.Policy, deps PlannerDeps) (llm.RegimeFn, []string, error)
+	// Available reports whether the kind's data dependency is wired. When it
+	// is not, the WHOLE domain declines to its non-selection fallback exactly
+	// as it would without strategies — the competition must never degrade a
+	// kind domain into mis-parameterized text children.
+	Available func(deps PlannerDeps) bool
+}
+
+// strategyKits maps a descriptor's PlannerKind to its strategy kit. A new
+// numeric domain that wants strategy competition registers a kit here next to
+// its plannerBuilders entry.
+var strategyKits = map[string]*StrategyKit{
+	"finance": financeStrategyKit(),
+}
+
+// financeStrategyKit adapts the finance lens builder and regime classifier to
+// the generic kit contract.
+func financeStrategyKit() *StrategyKit {
+	mustProvider := func(deps PlannerDeps) (marketdata.Provider, error) {
+		provider, ok := deps.DataSources[marketDataKey].(marketdata.Provider)
+		if !ok {
+			return nil, fmt.Errorf("finance strategy kit: no market data wired")
+		}
+		return provider, nil
+	}
+	return &StrategyKit{
+		Available: func(deps PlannerDeps) bool {
+			_, ok := deps.DataSources[marketDataKey].(marketdata.Provider)
+			return ok
+		},
+		BuildChild: func(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, s pack.StrategyDescriptor, inner llm.Planner) (llm.Planner, error) {
+			provider, err := mustProvider(deps)
+			if err != nil {
+				return nil, err
+			}
+			return buildFinanceChild(d, pol, deps, provider, s, inner), nil
+		},
+		BuildClassifier: func(d pack.Descriptor, pol policy.Policy, deps PlannerDeps) (llm.RegimeFn, []string, error) {
+			provider, err := mustProvider(deps)
+			if err != nil {
+				return nil, nil, err
+			}
+			labels := []string{string(finance.RegimeTrend), string(finance.RegimeRange), string(finance.RegimeHighVol)}
+			return financeRegimeFn(provider, deps.FinanceNow), labels, nil
+		},
+	}
+}
+
+// buildStrategySelector assembles a domain's strategy competition, for ANY
+// domain: kit children for a registered planner kind, prompt-variant text
+// children otherwise. It returns (nil, nil) when the domain runs without
+// competition — selection disabled, no strategies declared, or the kind's
+// kit unavailable (the decline rule) — and the caller proceeds with the
+// normal single-planner path. Declared-but-invalid strategy configuration is
+// an error, never a silent fallback. The selector itself is never cached:
+// selection is cheap and pure, and its hysteresis input (the incumbent
+// strategy) must stay live.
+func buildStrategySelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, textChild func(pack.Descriptor, pack.StrategyDescriptor) llm.Planner) (llm.Planner, error) {
+	strategies := activeStrategies(d, pol)
+	if !selectionEnabled(d, pol) || len(strategies) == 0 {
+		return nil, nil
+	}
+	if err := d.ValidateStrategies(); err != nil {
+		return nil, err
+	}
+
+	kit := strategyKits[d.PlannerKind]
+	if d.PlannerKind != "" && kit == nil {
+		// A numeric kind without a kit cannot compete: its strategies carry
+		// kind-specific tuning that text children cannot interpret.
+		return nil, fmt.Errorf("domain kind %q declares strategies but registers no strategy kit", d.PlannerKind)
+	}
+	if kit != nil && !kit.Available(deps) {
+		return nil, nil // decline: the domain falls back exactly as without strategies
+	}
+
+	// The classifier's label set is CLOSED: a declared label outside it would
+	// silently gate the strategy out of every classified context (fail-closed),
+	// so it fails the build instead.
+	var regimeFn llm.RegimeFn
+	var labels []string
+	if kit != nil {
+		var err error
+		regimeFn, labels, err = kit.BuildClassifier(d, pol, deps)
+		if err != nil {
+			return nil, err
+		}
+	}
+	for _, s := range strategies {
+		for _, r := range s.Regimes {
+			if !slices.Contains(labels, r) {
+				return nil, fmt.Errorf("strategy %q declares unknown regime %q (valid: %v)", s.ID, r, labels)
+			}
+		}
+	}
+
+	// Text children differ ONLY by prompt template, which is also their cache
+	// key: an empty or duplicated template would silently alias two children
+	// onto one cached plan and score it twice.
+	if kit == nil {
+		seen := map[string]string{}
+		for _, s := range strategies {
+			if strings.TrimSpace(s.PromptTemplate) == "" {
+				return nil, fmt.Errorf("text strategy %q declares no prompt template", s.ID)
+			}
+			if prev, dup := seen[s.PromptTemplate]; dup {
+				return nil, fmt.Errorf("text strategies %q and %q share one prompt template", prev, s.ID)
+			}
+			seen[s.PromptTemplate] = s.ID
+		}
+	}
+
+	buildChild := func(s pack.StrategyDescriptor, inner llm.Planner) (llm.Planner, error) {
+		if kit != nil {
+			return kit.BuildChild(d, pol, deps, s, inner)
+		}
+		return textChild(d, s), nil
+	}
+	// Narration is a kit concern (finance hybrid mode); text children already
+	// produce complete summaries.
+	var narrator llm.Planner
+	if kit != nil {
+		narrator = deps.FinanceInner
+	}
+
+	if len(strategies) == 1 {
+		// Exactly one strategy left (policy disabled the rest): pin that lens
+		// as the single planner — no competition, but its tuning still applies.
+		return buildChild(strategies[0], narrator)
+	}
 
 	children := make([]llm.StrategyChild, 0, len(strategies))
 	for _, s := range strategies {
-		// Children carry no narrator: narration runs once on the winner, inside
-		// the selector.
-		child := buildFinanceChild(d, pol, deps, provider, s, nil)
+		child, err := buildChild(s, nil)
+		if err != nil {
+			return nil, err
+		}
 		children = append(children, llm.StrategyChild{ID: s.ID, Planner: child, Regimes: s.Regimes})
 	}
 
+	dp, hasPolicy := pol.For(d.ID)
 	selCfg := llm.SelectorConfig{
 		Children:       children,
-		Inner:          deps.FinanceInner,
+		Inner:          narrator,
 		PromptTemplate: d.PromptTemplate,
-		Regime:         financeRegimeFn(provider, deps.FinanceNow),
+		Regime:         regimeFn,
 		// The penalty quantum is the domain's materiality threshold, so a
 		// disagreement haircut is always either zero or material.
 		PenaltyStep: effectiveDelta(d, pol),

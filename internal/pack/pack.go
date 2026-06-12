@@ -15,6 +15,7 @@
 package pack
 
 import (
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -99,10 +100,18 @@ type Descriptor struct {
 
 	// Strategies declares the named strategy variants that compete for this
 	// domain. The wiring layer builds one child planner per strategy (via the
-	// domain's PlannerKind) and composes them under a selector. Empty — every
-	// pre-existing pack — means exactly the single-planner behaviour. The slice
-	// order is canonical: it is the selection's last-resort tie-break.
+	// domain's PlannerKind, or as prompt variants for text domains) and
+	// composes them under a selector. Empty — every pre-existing pack — means
+	// exactly the single-planner behaviour. The slice order is canonical: it
+	// is the selection's last-resort tie-break.
 	Strategies []StrategyDescriptor `json:"strategies,omitempty" yaml:"strategies,omitempty"`
+
+	// SelectionDefaultOn turns the strategy competition on by default for this
+	// domain (policy remains the per-deployment override either way). The flip
+	// must be EARNED per domain — investing earned it via its backtest gates —
+	// so declaring strategies alone never changes a deployment's behaviour or
+	// cost profile.
+	SelectionDefaultOn bool `json:"selection_default_on,omitempty" yaml:"selection_default_on,omitempty"`
 
 	// Validation is the declarative validation policy for the domain: a set of
 	// shape rules plus an optional vocabulary check. It is pure data so a domain
@@ -126,6 +135,44 @@ type StrategyDescriptor struct {
 	// builder. Like Descriptor.Scoring it is not config-loadable; tune via the
 	// policy file instead.
 	Scoring any `json:"-" yaml:"-"`
+	// PromptTemplate reframes move generation through this strategy's lens for
+	// TEXT domains: it is appended after the pack's own template. Unlike
+	// Scoring it IS config-loadable, so a config-defined pack can declare
+	// prompt-variant strategies with zero code. Ignored by numeric kinds.
+	PromptTemplate string `json:"prompt_template,omitempty" yaml:"prompt_template,omitempty"`
+}
+
+// ValidateStrategies checks the pure-data invariants of a strategy
+// declaration, the ones any pack (built-in or config-loaded) must satisfy
+// before the wiring layer adds kind-specific checks: stable unique IDs, the
+// generic domain staying strategy-free (its byte-for-byte prompt invariant),
+// and — when several strategies gate themselves by context labels — at least
+// one ungated strategy so gating can never empty the candidate set.
+func (d Descriptor) ValidateStrategies() error {
+	if len(d.Strategies) == 0 {
+		return nil
+	}
+	if d.ID == "" || d.ID == DefaultDomain {
+		return fmt.Errorf("the generic domain cannot declare strategies")
+	}
+	seen := make(map[string]bool, len(d.Strategies))
+	ungated := false
+	for _, s := range d.Strategies {
+		if strings.TrimSpace(s.ID) == "" {
+			return fmt.Errorf("strategy with empty id")
+		}
+		if seen[s.ID] {
+			return fmt.Errorf("duplicate strategy id %q", s.ID)
+		}
+		seen[s.ID] = true
+		if len(s.Regimes) == 0 {
+			ungated = true
+		}
+	}
+	if len(d.Strategies) >= 2 && !ungated {
+		return fmt.Errorf("every strategy declares regime gates; at least one must stay ungated so gating can never empty the field")
+	}
+	return nil
 }
 
 // KindScope names where a kind-based rule looks for a kind.

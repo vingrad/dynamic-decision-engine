@@ -78,9 +78,35 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 		return w
 	}
 
+	// textChild builds one prompt-variant strategy child for a text domain.
+	// Composition order is the same load-bearing Guided(Caching(base)): the
+	// variant's combined template becomes the SystemPromptOverride BEFORE the
+	// cache computes its key, so variants cache distinctly. The PromptVersion
+	// is suffixed with the strategy ID so the winning plan's provenance names
+	// its variant (text children all report the base planner's name).
+	textChild := func(d pack.Descriptor, s pack.StrategyDescriptor) llm.Planner {
+		return llm.NewGuidedPlanner(cacheWrap(rawBase(d.ID)), llm.GuidedConfig{
+			PackID:         d.ID,
+			PackVersion:    d.Version,
+			PromptVersion:  d.PromptVersion + "+" + s.ID,
+			PromptTemplate: d.PromptTemplate + "\n\n" + s.PromptTemplate,
+		})
+	}
+
 	routes := map[string]llm.Planner{}
 	for _, id := range reg.IDs() {
 		d, _ := reg.Get(id)
+
+		// Strategy competition is assembled generically for ANY domain that
+		// declares (enabled) strategies — kit children for a registered planner
+		// kind, prompt-variant text children otherwise. A nil planner means the
+		// domain runs without competition and proceeds down the normal paths.
+		if p, err := buildStrategySelector(d, pol, deps, textChild); err != nil {
+			return nil, fmt.Errorf("wire: domain %q: %w", id, err)
+		} else if p != nil {
+			routes[id] = p
+			continue
+		}
 
 		// A domain that declares a PlannerKind is built by the matching registered
 		// builder (e.g. the numeric finance planner). A builder that returns a nil

@@ -66,6 +66,9 @@ func investingPack() Descriptor {
 		Eval:           EvaluatorConfig{ConfidenceDelta: 0.05},
 		Scoring:        &scoring,
 		Strategies:     investingStrategies(),
+		// Earned by the backtest gates (TestStrategyMatrixGates); policy
+		// remains the off switch.
+		SelectionDefaultOn: true,
 		Vocab: Vocabulary{
 			AssetKinds:      []string{"capital", "edge", "information", "conviction", "liquidity", "time_horizon"},
 			ConstraintKinds: []string{"risk_tolerance", "liquidity", "time_horizon", "drawdown_limit", "mandate", "tax"},
