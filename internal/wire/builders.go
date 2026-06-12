@@ -128,6 +128,9 @@ func buildFinanceSelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps
 		Inner:          deps.FinanceInner,
 		PromptTemplate: d.PromptTemplate,
 		Regime:         financeRegimeFn(provider, deps.FinanceNow),
+		// The penalty quantum is the domain's materiality threshold, so a
+		// disagreement haircut is always either zero or material.
+		PenaltyStep: effectiveDelta(d, pol),
 	}
 	if hasPolicy && dp.Strategy != nil {
 		selCfg.Weights = dp.Strategy.Weights

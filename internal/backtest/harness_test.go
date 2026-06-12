@@ -30,7 +30,10 @@ func TestHarnessRun(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h := New(pack.NewRegistry(), policy.Policy{}, prov)
+	h, err := New(pack.NewRegistry(), policy.Policy{}, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
 	sc := loadScenario(t, "testdata/scenario.json")
 
 	rep, err := h.Run(context.Background(), sc)

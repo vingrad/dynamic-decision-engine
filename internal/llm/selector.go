@@ -31,11 +31,11 @@ type StrategyChild struct {
 // disables regime gating entirely.
 type RegimeFn func(ctx context.Context, goal domain.Goal) (string, error)
 
-// defaultIncumbentMargin is the hysteresis a challenger must clear over the
-// incumbent strategy. It is deliberately at least the investing pack's
-// materiality ConfidenceDelta so a winner flip is never triggered by sub-
-// materiality noise.
-const defaultIncumbentMargin = 0.05
+// defaultPenaltyStep is the disagreement-penalty quantum (and the default
+// hysteresis margin) when no domain materiality threshold is threaded in. It
+// matches the historical investing ConfidenceDelta so unwired callers keep
+// the original behaviour.
+const defaultPenaltyStep = 0.05
 
 // SelectorConfig assembles a SelectorPlanner.
 type SelectorConfig struct {
@@ -46,7 +46,12 @@ type SelectorConfig struct {
 	// Regime, when non-nil, classifies the market regime to gate children and
 	// stamp provenance.
 	Regime RegimeFn
-	// IncumbentMargin overrides the hysteresis margin; zero means the default.
+	// PenaltyStep is the disagreement-penalty quantum, normally the domain's
+	// materiality ConfidenceDelta so a haircut is always either zero or
+	// material. Zero means the historical 0.05 default.
+	PenaltyStep float64
+	// IncumbentMargin overrides the hysteresis margin; zero means the penalty
+	// step (a challenger must clear at least one materiality step).
 	IncumbentMargin float64
 	// Inner, when non-nil, narrates the WINNING plan only (hybrid mode) — one
 	// model call per decision regardless of how many strategies competed.
@@ -62,6 +67,7 @@ type SelectorPlanner struct {
 	children []StrategyChild
 	weights  map[string]float64
 	regime   RegimeFn
+	step     float64
 	margin   float64
 	inner    Planner
 	prompt   string
@@ -84,14 +90,19 @@ func NewSelectorPlanner(cfg SelectorConfig) (*SelectorPlanner, error) {
 		}
 		seen[c.ID] = true
 	}
+	step := cfg.PenaltyStep
+	if step == 0 {
+		step = defaultPenaltyStep
+	}
 	margin := cfg.IncumbentMargin
 	if margin == 0 {
-		margin = defaultIncumbentMargin
+		margin = step
 	}
 	return &SelectorPlanner{
 		children: cfg.Children,
 		weights:  cfg.Weights,
 		regime:   cfg.Regime,
+		step:     step,
 		margin:   margin,
 		inner:    cfg.Inner,
 		prompt:   cfg.PromptTemplate,
@@ -176,7 +187,7 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 	// may be a cache hit whose slice shares its backing array with the child's
 	// plan-cache entry, and an in-place write would corrupt the cached result
 	// (compounding the penalty on every subsequent hit).
-	penalty := strategy.DisagreementPenalty(sel.Scored, sel.Scored[sel.Winner].TopMoveKey)
+	penalty := strategy.DisagreementPenalty(sel.Scored, sel.Scored[sel.Winner].TopMoveKey, p.step)
 	if penalty > 0 {
 		moves := append([]domain.RankedMove(nil), winner.RankedMoves...)
 		for i := range moves {

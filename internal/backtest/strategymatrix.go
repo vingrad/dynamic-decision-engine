@@ -53,7 +53,11 @@ func RunStrategyMatrix(ctx context.Context, reg *pack.Registry, basePol policy.P
 			if err != nil {
 				return nil, err
 			}
-			rep, err := New(reg, cfg.pol, provider).Run(ctx, sc)
+			h, err := New(reg, cfg.pol, provider)
+			if err != nil {
+				return nil, err
+			}
+			rep, err := h.Run(ctx, sc)
 			if err != nil {
 				return nil, fmt.Errorf("backtest: config %q scenario %q: %w", cfg.name, sc.Name, err)
 			}

@@ -1,6 +1,10 @@
 package finance
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/strategy"
+)
 
 // Outcome-weighted strategy selection, the strategy analogue of calibrate.go:
 // recorded outcomes are folded into per-strategy utility multipliers that the
@@ -56,9 +60,9 @@ func FitStrategyWeights(samples []StrategySample) map[string]float64 {
 		if s.Strategy == "" {
 			continue
 		}
-		add(s.Strategy, s.Success)
+		add(strategy.WeightKey(s.Strategy, ""), s.Success)
 		if s.Regime != RegimeUnknown {
-			add(s.Strategy+"@"+string(s.Regime), s.Success)
+			add(strategy.WeightKey(s.Strategy, string(s.Regime)), s.Success)
 		}
 	}
 

@@ -140,15 +140,27 @@ func applyWeight(u, w float64) float64 {
 	return round4(u * w)
 }
 
-// weightFor resolves the outcome weight for a strategy: the regime-specific
-// "id@regime" entry wins over the plain "id" entry; absent keys mean 1.0.
+// WeightKey is the canonical outcome-weight map key for a strategy under a
+// context label (the finance "regime"): the bare ID for the pooled bucket, or
+// "id@label" for the label-specific bucket. It is the single definition of
+// the key syntax — both the weight fitter and the selector lookup MUST build
+// keys through it, so the two sides can never drift apart silently.
+func WeightKey(id, label string) string {
+	if label == "" {
+		return id
+	}
+	return id + "@" + label
+}
+
+// weightFor resolves the outcome weight for a strategy: the label-specific
+// entry wins over the pooled entry; absent keys mean 1.0.
 func weightFor(opts Options, id string) float64 {
 	if opts.Regime != "" {
-		if w, ok := opts.Weights[id+"@"+opts.Regime]; ok && w > 0 {
+		if w, ok := opts.Weights[WeightKey(id, opts.Regime)]; ok && w > 0 {
 			return w
 		}
 	}
-	if w, ok := opts.Weights[id]; ok && w > 0 {
+	if w, ok := opts.Weights[WeightKey(id, "")]; ok && w > 0 {
 		return w
 	}
 	return 1.0
@@ -255,12 +267,17 @@ func ReWeigh(cands []domain.StrategyCandidate, weights map[string]float64, regim
 }
 
 // DisagreementPenalty converts strategy disagreement into a confidence
-// haircut, quantized to steps of 0.05 — the investing pack's materiality
-// ConfidenceDelta — so disagreement either leaves stated confidence alone or
-// moves it by a deliberately material step; sub-threshold churn from a
-// flickering minority opinion is impossible by construction. Agreement is the
-// share of admissible candidates whose top move matches the winner's.
-func DisagreementPenalty(scored []Scored, winnerTopKey string) float64 {
+// haircut, quantized to multiples of step — the caller passes the domain's
+// materiality ConfidenceDelta — so disagreement either leaves stated
+// confidence alone or moves it by a deliberately material amount;
+// sub-threshold churn from a flickering minority opinion is impossible by
+// construction. Agreement is the share of admissible candidates whose top
+// move matches the winner's: a majority still agreeing costs one step, a
+// minority costs two.
+func DisagreementPenalty(scored []Scored, winnerTopKey string, step float64) float64 {
+	if step <= 0 {
+		return 0
+	}
 	admissible, agree := 0, 0
 	for _, s := range scored {
 		if s.Filtered {
@@ -275,7 +292,7 @@ func DisagreementPenalty(scored []Scored, winnerTopKey string) float64 {
 		return 0
 	}
 	if float64(agree)/float64(admissible) >= 0.5 {
-		return 0.05
+		return step
 	}
-	return 0.10
+	return 2 * step
 }

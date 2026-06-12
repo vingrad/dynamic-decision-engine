@@ -29,19 +29,24 @@ type Harness struct {
 }
 
 // New builds a harness for the given registry/policy and market-data provider.
-func New(reg *pack.Registry, pol policy.Policy, provider marketdata.Provider) *Harness {
+// It errors when the wiring is invalid (e.g. a domain declares broken strategy
+// configuration), matching production startup behaviour.
+func New(reg *pack.Registry, pol policy.Policy, provider marketdata.Provider) (*Harness, error) {
 	sim := &simClock{}
-	router := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
+	router, err := wire.BuildPlannerRouter(reg, pol, wire.PlannerDeps{
 		Base:        llm.NewMockPlanner(),
 		DataSources: map[string]wire.DataSource{"marketdata": provider},
 		FinanceNow:  sim.Now,
 	})
+	if err != nil {
+		return nil, err
+	}
 	eng := engine.New(router,
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
 		engine.WithClock(sim.Now),
 	)
-	return &Harness{eng: eng, sim: sim, provider: provider}
+	return &Harness{eng: eng, sim: sim, provider: provider}, nil
 }
 
 // Run replays the scenario and returns a decision-quality report. Nothing is

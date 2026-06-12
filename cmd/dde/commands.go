@@ -212,7 +212,10 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 	if cfg.FinanceHybrid {
 		deps.FinanceInner = baseFor("investing")
 	}
-	router := wire.BuildPlannerRouter(reg, pol, deps)
+	router, err := wire.BuildPlannerRouter(reg, pol, deps)
+	if err != nil {
+		return nil, err
+	}
 	opts := []engine.Option{
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
@@ -552,7 +555,10 @@ func newBacktestCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			h := backtest.New(reg, pol, provider)
+			h, err := backtest.New(reg, pol, provider)
+			if err != nil {
+				return err
+			}
 			rep, err := h.Run(cmd.Context(), sc)
 			if err != nil {
 				return err

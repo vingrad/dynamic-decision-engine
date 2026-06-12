@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
@@ -39,12 +40,15 @@ type PlannerDeps struct {
 }
 
 // BuildPlannerRouter assembles a per-domain llm.PlannerRouter from the registry
-// (overlaid with policy) and the given dependencies.
+// (overlaid with policy) and the given dependencies. A builder ERROR is a
+// misconfiguration and fails the build — silently degrading to a text planner
+// would mask it; a builder returning a nil planner still declines gracefully
+// (e.g. its data source is not wired) and the domain falls back to guided text.
 //
 // Composition order is load-bearing: Guided(Caching(base)) so the guided planner
 // sets the domain prompt override BEFORE the cache computes its key — otherwise
 // every domain would collide on one cache entry.
-func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps) llm.Planner {
+func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps) (llm.Planner, error) {
 	// rawBase returns the un-cached base planner for a domain: the per-domain
 	// override when configured, else the global Base.
 	rawBase := func(domainID string) llm.Planner {
@@ -82,8 +86,13 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 		// builder (e.g. the numeric finance planner). A builder that returns a nil
 		// planner declines (e.g. its data source is not wired), and the domain falls
 		// through to the guided/base text path below — preserving prior behaviour.
+		// A builder ERROR surfaces: it means declared configuration is invalid.
 		if b, ok := plannerBuilders[d.PlannerKind]; ok && d.PlannerKind != "" {
-			if p, err := b(d, pol, deps); err == nil && p != nil {
+			p, err := b(d, pol, deps)
+			if err != nil {
+				return nil, fmt.Errorf("wire: domain %q: %w", id, err)
+			}
+			if p != nil {
 				routes[id] = p
 				continue
 			}
@@ -109,5 +118,5 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 	// The default (empty/unknown domain) is the generic, unstamped base — resolved
 	// through the same generic override so empty-domain and explicit-"generic" goals
 	// stay consistent.
-	return llm.NewPlannerRouter(cacheWrap(rawBase(pack.DefaultDomain)), routes)
+	return llm.NewPlannerRouter(cacheWrap(rawBase(pack.DefaultDomain)), routes), nil
 }

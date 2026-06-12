@@ -27,8 +27,19 @@ func plan(t *testing.T, p llm.Planner, domainKey string) llm.PlanResult {
 // TestBuildPlannerRouterBaseFor: a per-domain base (the C2 seam) routes that domain
 // to its own planner, still wrapped by the guided pack stamp, while other domains
 // and the default keep the global base.
+// mustRouter builds the router or fails the test — the error path has its own
+// dedicated tests.
+func mustRouter(t *testing.T, reg *pack.Registry, pol policy.Policy, deps PlannerDeps) llm.Planner {
+	t.Helper()
+	router, err := BuildPlannerRouter(reg, pol, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return router
+}
+
 func TestBuildPlannerRouterBaseFor(t *testing.T) {
-	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
+	router := mustRouter(t, pack.NewRegistry(), policy.Policy{}, PlannerDeps{
 		Base: llm.NewMockPlanner(),
 		BaseFor: func(id string) llm.Planner {
 			if id == "growth" {
@@ -60,7 +71,7 @@ func TestBuildPlannerRouterRoutes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
+	router := mustRouter(t, pack.NewRegistry(), policy.Policy{}, PlannerDeps{
 		Base:        llm.NewMockPlanner(),
 		DataSources: map[string]DataSource{"marketdata": prov},
 		FinanceNow:  func() time.Time { return time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC) },
@@ -103,7 +114,7 @@ func TestFinanceCacheTTLRefreshes(t *testing.T) {
 	clock := func() time.Time { return now }
 	financeCache := llm.NewMemoryCacheTTL(64, 30*time.Second, clock)
 
-	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
+	router := mustRouter(t, pack.NewRegistry(), policy.Policy{}, PlannerDeps{
 		Base:         llm.NewMockPlanner(),
 		DataSources:  map[string]DataSource{"marketdata": prov},
 		FinanceCache: financeCache,
