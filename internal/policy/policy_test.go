@@ -142,3 +142,31 @@ func TestStrategySelectionValidate(t *testing.T) {
 		})
 	}
 }
+
+func TestStrategyComparatorValidation(t *testing.T) {
+	mk := func(comparator string, planner *PlannerSpec) Policy {
+		return Policy{Domains: map[string]DomainPolicy{
+			"growth": {
+				Strategy: &StrategySelection{Comparator: comparator},
+				Planner:  planner,
+			},
+		}}
+	}
+	if err := mk("utility", nil).Validate(); err != nil {
+		t.Errorf("utility must validate: %v", err)
+	}
+	if err := mk("verify", nil).Validate(); err != nil {
+		t.Errorf("verify must validate: %v", err)
+	}
+	if err := mk("judge", nil).Validate(); err == nil {
+		t.Error("judge is reserved and must be rejected for now")
+	}
+	if err := mk("vibes", nil).Validate(); err == nil {
+		t.Error("unknown comparator must be rejected")
+	}
+	// Double verification (comparator verify + multi_mode verify) is rejected.
+	double := mk("verify", &PlannerSpec{Planner: "multi", MultiMode: "verify", MultiProviders: []string{"anthropic", "openai"}})
+	if err := double.Validate(); err == nil {
+		t.Error("comparator verify over a verify planner must be rejected")
+	}
+}

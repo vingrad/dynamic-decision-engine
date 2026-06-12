@@ -268,6 +268,21 @@ func buildStrategySelector(d pack.Descriptor, pol policy.Policy, deps PlannerDep
 		if dp.Strategy.IncumbentMargin != nil {
 			selCfg.IncumbentMargin = *dp.Strategy.IncumbentMargin
 		}
+		if dp.Strategy.Comparator == "verify" {
+			// The reviewer is the domain's (or global) raw base when it can
+			// verify. Wrapping a nil verifier is deliberate: review then fails
+			// at decision time and the selector's all-or-nothing degradation
+			// records WHY the competition ran unreviewed, instead of the build
+			// silently downgrading the comparator.
+			base := deps.Base
+			if deps.BaseFor != nil {
+				if p := deps.BaseFor(d.ID); p != nil {
+					base = p
+				}
+			}
+			verifier, _ := base.(llm.PlanVerifier)
+			selCfg.Reviewer = llm.NewVerifyReviewer(verifier)
+		}
 	}
 	return llm.NewSelectorPlanner(selCfg)
 }

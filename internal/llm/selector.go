@@ -60,6 +60,10 @@ type SelectorConfig struct {
 	// PromptTemplate is the pack's domain guidance, handed to the narrator as
 	// its system prompt override.
 	PromptTemplate string
+	// Reviewer, when non-nil, adjusts every candidate's stated numbers before
+	// the pure utility math arbitrates (see CandidateReviewer). A reviewer
+	// error degrades all-or-nothing to the raw candidates, noted in provenance.
+	Reviewer CandidateReviewer
 }
 
 // SelectorPlanner implements Planner over a set of competing strategy children.
@@ -71,6 +75,7 @@ type SelectorPlanner struct {
 	margin   float64
 	inner    Planner
 	prompt   string
+	reviewer CandidateReviewer
 }
 
 // NewSelectorPlanner validates and constructs a selector. It requires at
@@ -106,6 +111,7 @@ func NewSelectorPlanner(cfg SelectorConfig) (*SelectorPlanner, error) {
 		margin:   margin,
 		inner:    cfg.Inner,
 		prompt:   cfg.PromptTemplate,
+		reviewer: cfg.Reviewer,
 	}, nil
 }
 
@@ -149,16 +155,9 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 	}
 	wg.Wait()
 
-	cands := make([]strategy.Candidate, len(eligible))
 	var lastErr error
 	failed := 0
 	for i := range eligible {
-		cands[i] = strategy.Candidate{
-			ID:          eligible[i].ID,
-			PlannerName: eligible[i].Planner.Name(),
-			Moves:       results[i].RankedMoves,
-			Err:         errs[i],
-		}
 		if errs[i] != nil {
 			failed++
 			lastErr = errs[i]
@@ -166,6 +165,44 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 	}
 	if failed == len(eligible) {
 		return PlanResult{}, fmt.Errorf("llm: all %d strategy children failed: %w", failed, lastErr)
+	}
+
+	// The reviewer adjusts every successful candidate's stated numbers before
+	// the pure math arbitrates. ALL-OR-NOTHING: on any error the raw results
+	// stand for every candidate — a partially reviewed competition would
+	// compare adjusted confidences against raw ones.
+	comparator := "utility"
+	reviewNote := ""
+	var reviewContribs []domain.ModelContribution
+	if p.reviewer != nil {
+		comparator = p.reviewer.Name()
+		var toReview []PlanResult
+		var idx []int
+		for i := range eligible {
+			if errs[i] == nil {
+				toReview = append(toReview, results[i])
+				idx = append(idx, i)
+			}
+		}
+		if adjusted, contribs, rerr := p.reviewer.ReviewCandidates(ctx, req.Goal, toReview); rerr != nil {
+			reviewNote = fmt.Sprintf("comparator %s degraded to utility: %v", comparator, rerr)
+			comparator = "utility"
+		} else {
+			for j, i := range idx {
+				results[i] = adjusted[j]
+			}
+			reviewContribs = contribs
+		}
+	}
+
+	cands := make([]strategy.Candidate, len(eligible))
+	for i := range eligible {
+		cands[i] = strategy.Candidate{
+			ID:          eligible[i].ID,
+			PlannerName: eligible[i].Planner.Name(),
+			Moves:       results[i].RankedMoves,
+			Err:         errs[i],
+		}
 	}
 
 	sel, err := strategy.Select(req.Goal, cands, strategy.Options{
@@ -196,7 +233,7 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 		winner.RankedMoves = moves
 	}
 
-	contributors := p.buildContributors(eligible, results, errs, sel.Winner)
+	contributors := append(p.buildContributors(eligible, results, errs, sel.Winner), reviewContribs...)
 
 	// Hybrid narration runs once, on the winner only — the competition never
 	// multiplies model cost.
@@ -224,10 +261,11 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 
 	winner.Provenance.Strategy = "selector"
 	winner.Provenance.SelectedStrategy = winnerID
+	winner.Provenance.Comparator = comparator
 	winner.Provenance.Regime = regime
 	winner.Provenance.StrategyCandidates = buildCandidateAudit(sel.Scored, cands)
 	winner.Provenance.Contributors = contributors
-	winner.Provenance.Notes = composeSelectorNotes(sel.Reason, gateNote, penalty)
+	winner.Provenance.Notes = composeSelectorNotes(sel.Reason, gateNote, reviewNote, penalty)
 	return winner, nil
 }
 
@@ -281,10 +319,13 @@ func buildCandidateAudit(scored []strategy.Scored, cands []strategy.Candidate) [
 	return out
 }
 
-func composeSelectorNotes(reason, gateNote string, penalty float64) string {
+func composeSelectorNotes(reason, gateNote, reviewNote string, penalty float64) string {
 	parts := []string{reason}
 	if gateNote != "" {
 		parts = append(parts, gateNote)
+	}
+	if reviewNote != "" {
+		parts = append(parts, reviewNote)
 	}
 	if penalty > 0 {
 		parts = append(parts, fmt.Sprintf("strategy disagreement: confidence reduced by %.2f", penalty))

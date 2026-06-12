@@ -603,9 +603,10 @@ func (s *Service) goalStrategySamples(ctx context.Context, goalID string) ([]fin
 				continue // pre-selector plan: no strategy to attribute
 			}
 			samples = append(samples, finance.StrategySample{
-				Strategy: v.Provenance.SelectedStrategy,
-				Regime:   finance.Regime(v.Provenance.Regime),
-				Success:  success,
+				Strategy:   v.Provenance.SelectedStrategy,
+				Regime:     finance.Regime(v.Provenance.Regime),
+				Success:    success,
+				Comparator: v.Provenance.Comparator,
 			})
 		}
 		if len(outcomes) < page.Limit {

@@ -19,6 +19,11 @@ type StrategySample struct {
 	Strategy string `json:"strategy" yaml:"strategy"`
 	Regime   Regime `json:"regime" yaml:"regime"`
 	Success  bool   `json:"success" yaml:"success"`
+	// Comparator is the comparison mode the decision ran under ("" reads as
+	// "utility", the mode of every pre-comparator plan). Weights must only be
+	// fitted from samples under ONE comparator — `dde strategy-fit` filters on
+	// the domain's configured mode before calling FitStrategyWeights.
+	Comparator string `json:"comparator,omitempty" yaml:"comparator,omitempty"`
 }
 
 const (

@@ -50,6 +50,13 @@ type StrategySelection struct {
 	// Params overrides a named strategy's numeric tuning (prior tilts, weights,
 	// risk scale), keyed by strategy ID.
 	Params map[string]*finance.StrategyParams `json:"params,omitempty" yaml:"params,omitempty"`
+	// Comparator selects how competing candidates are compared: "" or
+	// "utility" (the pure goal-utility math) or "verify" (one independent
+	// reviewer critiques every candidate first — all-or-nothing — then the
+	// utility math arbitrates; needs a verifier-capable LLM client). "judge"
+	// (one side-by-side comparison call) is reserved for a future mode.
+	// Outcome weights are only fitted from decisions under the same comparator.
+	Comparator string `json:"comparator,omitempty" yaml:"comparator,omitempty"`
 }
 
 // DomainPolicy overrides a single domain's tunables. Pointer/optional fields mean
@@ -135,6 +142,11 @@ func (p Policy) Validate() error {
 			if err := dp.Strategy.validate(); err != nil {
 				return fmt.Errorf("domain %q strategy: %w", id, err)
 			}
+			// Comparator "verify" on top of a verify multi-planner would
+			// critique every candidate twice — reject the redundant spend.
+			if dp.Strategy.Comparator == "verify" && dp.Planner != nil && dp.Planner.MultiMode == "verify" {
+				return fmt.Errorf("domain %q: comparator verify with a multi_mode verify planner double-verifies every candidate", id)
+			}
 		}
 	}
 	return nil
@@ -167,6 +179,13 @@ func (s StrategySelection) validate() error {
 	}
 	if s.IncumbentMargin != nil && *s.IncumbentMargin < 0 {
 		return fmt.Errorf("incumbent_margin: must be >= 0, got %v", *s.IncumbentMargin)
+	}
+	switch s.Comparator {
+	case "", "utility", "verify":
+	case "judge":
+		return fmt.Errorf("comparator judge is reserved but not implemented yet")
+	default:
+		return fmt.Errorf("unknown comparator %q (want utility|verify)", s.Comparator)
 	}
 	return nil
 }
