@@ -292,7 +292,7 @@ func TestDisagreementPenalty(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := DisagreementPenalty(tc.scored, "x"); got != tc.want {
+			if got := DisagreementPenalty(tc.scored, "x", 0.05); got != tc.want {
 				t.Errorf("penalty = %v, want %v", got, tc.want)
 			}
 		})

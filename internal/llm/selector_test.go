@@ -3,6 +3,7 @@ package llm
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
@@ -380,5 +381,171 @@ func TestSelectorPenaltyDoesNotCorruptChildCache(t *testing.T) {
 		t.Fatal("expected a cached child entry")
 	} else if got := cached.RankedMoves[0].Confidence; got != 0.8 {
 		t.Errorf("cached child confidence = %v, want pristine 0.8", got)
+	}
+}
+
+// scriptedVerifier returns canned verdicts in call order, or an error after
+// failAfter successful calls (0 = never fail).
+type scriptedVerifier struct {
+	verdicts  []Verdict
+	failAfter int
+	calls     int
+}
+
+func (s *scriptedVerifier) VerifierName() string { return "scripted" }
+
+func (s *scriptedVerifier) VerifyPlan(_ context.Context, _ domain.Goal, _ PlanResult) (Verdict, domain.ModelInvocation, error) {
+	s.calls++
+	if s.failAfter > 0 && s.calls > s.failAfter {
+		return Verdict{}, domain.ModelInvocation{}, errors.New("verifier down")
+	}
+	v := s.verdicts[0]
+	if len(s.verdicts) > 1 {
+		s.verdicts = s.verdicts[1:]
+	}
+	return v, domain.ModelInvocation{Model: "scripted-1"}, nil
+}
+
+func TestSelectorVerifyComparatorAdjustsWinner(t *testing.T) {
+	// Bold self-reports 0.9; the reviewer cuts it to 0.3. Safe stays at 0.6.
+	bold := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-bold", 0.9, domain.LevelHigh, domain.LevelLow, domain.LevelMedium),
+	}}
+	safe := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-safe", 0.6, domain.LevelMedium, domain.LevelLow, domain.LevelLow),
+	}}
+	adj := 0.3
+	verifier := &scriptedVerifier{verdicts: []Verdict{
+		{Moves: []MoveVerdict{{Title: "act-bold", Keep: true, AdjustedConfidence: &adj}}},
+		{Moves: []MoveVerdict{{Title: "act-safe", Keep: true}}},
+	}}
+	p, err := NewSelectorPlanner(SelectorConfig{
+		Children: []StrategyChild{
+			{ID: "bold", Planner: bold},
+			{ID: "safe", Planner: safe},
+		},
+		Reviewer: NewVerifyReviewer(verifier),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: selectorGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.SelectedStrategy != "safe" {
+		t.Errorf("review should flip the winner to safe, got %q", res.Provenance.SelectedStrategy)
+	}
+	if res.Provenance.Comparator != "verify" {
+		t.Errorf("Comparator = %q, want verify", res.Provenance.Comparator)
+	}
+	var verifierContribs int
+	for _, c := range res.Provenance.Contributors {
+		if c.Role == "candidate-verifier" {
+			verifierContribs++
+		}
+	}
+	if verifierContribs != 2 {
+		t.Errorf("expected 2 candidate-verifier contributions, got %d", verifierContribs)
+	}
+}
+
+func TestSelectorVerifyComparatorAllOrNothing(t *testing.T) {
+	bold := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-bold", 0.9, domain.LevelHigh, domain.LevelLow, domain.LevelMedium),
+	}}
+	safe := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-safe", 0.6, domain.LevelMedium, domain.LevelLow, domain.LevelLow),
+	}}
+	adj := 0.3
+	// First candidate reviews fine, second errors: ALL adjustments discarded.
+	verifier := &scriptedVerifier{
+		verdicts:  []Verdict{{Moves: []MoveVerdict{{Title: "act-bold", Keep: true, AdjustedConfidence: &adj}}}},
+		failAfter: 1,
+	}
+	p, err := NewSelectorPlanner(SelectorConfig{
+		Children: []StrategyChild{
+			{ID: "bold", Planner: bold},
+			{ID: "safe", Planner: safe},
+		},
+		Reviewer: NewVerifyReviewer(verifier),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: selectorGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Raw numbers stand: bold's 0.9 (minus the 0.05 disagreement haircut on
+	// split top keys) wins, and provenance says why review was skipped.
+	if res.Provenance.SelectedStrategy != "bold" {
+		t.Errorf("degraded competition must use raw numbers: winner %q", res.Provenance.SelectedStrategy)
+	}
+	if res.Provenance.Comparator != "utility" {
+		t.Errorf("degraded Comparator = %q, want utility", res.Provenance.Comparator)
+	}
+	if !strings.Contains(res.Provenance.Notes, "degraded to utility") {
+		t.Errorf("notes must record the degradation, got %q", res.Provenance.Notes)
+	}
+}
+
+func TestSelectorVerifyComparatorMissingVerifier(t *testing.T) {
+	a := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act", 0.6, domain.LevelMedium, domain.LevelLow, domain.LevelMedium),
+	}}
+	b := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act", 0.7, domain.LevelMedium, domain.LevelLow, domain.LevelMedium),
+	}}
+	p, err := NewSelectorPlanner(SelectorConfig{
+		Children: []StrategyChild{{ID: "a", Planner: a}, {ID: "b", Planner: b}},
+		Reviewer: NewVerifyReviewer(nil), // policy asked for verify; no capable client
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: selectorGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.Comparator != "utility" || !strings.Contains(res.Provenance.Notes, "no verifier-capable client") {
+		t.Errorf("missing verifier must degrade with the reason recorded: %+v", res.Provenance)
+	}
+}
+
+// TestSelectorVerifyRejectingAllMovesFiltersCandidate: a candidate whose moves
+// are all dropped by the reviewer becomes inadmissible rather than restored.
+func TestSelectorVerifyRejectingAllMovesFiltersCandidate(t *testing.T) {
+	junk := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-junk", 0.95, domain.LevelHigh, domain.LevelLow, domain.LevelLow),
+	}}
+	solid := &fakePlanner{name: "base", moves: []domain.RankedMove{
+		strategyMove("act-solid", 0.5, domain.LevelMedium, domain.LevelLow, domain.LevelMedium),
+	}}
+	verifier := &scriptedVerifier{verdicts: []Verdict{
+		{Moves: []MoveVerdict{{Title: "act-junk", Keep: false, Issues: []string{"unsupported"}}}},
+		{Moves: []MoveVerdict{{Title: "act-solid", Keep: true}}},
+	}}
+	p, err := NewSelectorPlanner(SelectorConfig{
+		Children: []StrategyChild{
+			{ID: "junk", Planner: junk},
+			{ID: "solid", Planner: solid},
+		},
+		Reviewer: NewVerifyReviewer(verifier),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := p.GeneratePlan(context.Background(), PlanRequest{Goal: selectorGoal()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.SelectedStrategy != "solid" {
+		t.Errorf("winner = %q, want solid", res.Provenance.SelectedStrategy)
+	}
+	for _, c := range res.Provenance.StrategyCandidates {
+		if c.StrategyID == "junk" && !c.Filtered {
+			t.Errorf("fully rejected candidate must be filtered: %+v", c)
+		}
 	}
 }

@@ -36,6 +36,11 @@ type DecisionProvenance struct {
 	// SelectedStrategy names the domain strategy whose candidate plan won the
 	// selection (e.g. "momentum"). Set only when Strategy == "selector".
 	SelectedStrategy string `json:"selected_strategy,omitempty"`
+	// Comparator names the comparison mode the selection ran under ("utility",
+	// "verify"). Outcome analysis must partition by it: weights fitted from
+	// decisions under one comparator are not valid under another. Set only
+	// when Strategy == "selector".
+	Comparator string `json:"comparator,omitempty"`
 	// Regime is the market-regime label in effect when strategies were gated
 	// ("trend", "range", "high_vol"); empty when unknown or not classified. It is
 	// recorded even when gating changed nothing, so per-regime outcome analysis

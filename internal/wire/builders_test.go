@@ -41,7 +41,7 @@ func TestSecondNumericDomainNeedsNoRouterEdit(t *testing.T) {
 		Version:     "1",
 		PlannerKind: kind,
 	})
-	router := BuildPlannerRouter(reg, policy.Policy{}, PlannerDeps{Base: llm.NewMockPlanner()})
+	router := mustRouter(t, reg, policy.Policy{}, PlannerDeps{Base: llm.NewMockPlanner()})
 
 	res := plan(t, router, "sports")
 	if res.Provenance.Planner != "sentinel" {
@@ -59,7 +59,7 @@ func TestSecondNumericDomainNeedsNoRouterEdit(t *testing.T) {
 // domain with no market-data source wired falls through to the guided text planner
 // (the prior "investing without a provider" behaviour).
 func TestFinanceBuilderDeclinesWithoutDataSource(t *testing.T) {
-	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, PlannerDeps{
+	router := mustRouter(t, pack.NewRegistry(), policy.Policy{}, PlannerDeps{
 		Base: llm.NewMockPlanner(),
 		// no DataSources
 	})
@@ -96,7 +96,7 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 	polOff := policy.Policy{Domains: map[string]policy.DomainPolicy{
 		"investing": {Strategy: &policy.StrategySelection{Enabled: &off}},
 	}}
-	router := BuildPlannerRouter(pack.NewRegistry(), polOff, deps)
+	router := mustRouter(t, pack.NewRegistry(), polOff, deps)
 	res, err := router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
 	if err != nil {
 		t.Fatal(err)
@@ -108,7 +108,7 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 	// Default (no policy): the pack declares strategies, so the selector serves
 	// and candidates are recorded.
 	on := true
-	router = BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, deps)
+	router = mustRouter(t, pack.NewRegistry(), policy.Policy{}, deps)
 	res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
 	if err != nil {
 		t.Fatal(err)
@@ -131,7 +131,7 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 	pol.Domains["investing"] = policy.DomainPolicy{Strategy: &policy.StrategySelection{
 		Enabled: &on, Disable: []string{"momentum"},
 	}}
-	router = BuildPlannerRouter(pack.NewRegistry(), pol, deps)
+	router = mustRouter(t, pack.NewRegistry(), pol, deps)
 	res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
 	if err != nil {
 		t.Fatal(err)

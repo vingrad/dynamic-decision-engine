@@ -21,8 +21,12 @@ concept maps to a Go type in `internal/domain`.
 | **Outcome** | The recorded result of a move, addressed by its stable `(plan_version, move_rank)` location in the immutable plan. Closes the learning loop. |
 | **Plan** | The mutable head pointing at the current strategy for a goal. |
 | **PlanVersion** | An immutable, versioned snapshot of a plan. Append-only. |
-| **DecisionProvenance** | The explanation of why a plan/version was generated — reasoning summary, input snapshot, planner, prompt version, model. |
+| **DecisionProvenance** | The explanation of why a plan/version was generated — reasoning summary, input snapshot, planner, prompt version, model. When strategies competed it also records the winner, the comparator mode, the context label ("regime") and every candidate's score. |
 | **ModelInvocation** | Metadata about a reasoning-model call (model, prompt version, token usage, latency). Placeholder values under the mock planner. |
+| **Strategy** | A named lens a domain can plan through (investing: `value`/`momentum`/`defensive` parameter lenses; growth: `expand`/`retain`/`experiment` prompt lenses). Declared as pure data on the pack descriptor. |
+| **Strategy selection** | When a domain declares strategies (and selection is enabled), every lens produces a full candidate plan in parallel and a selector picks the winner: hard-constraint filter → goal-derived utility → deterministic tie-break, with hysteresis so near-ties never flap the winner. The whole competition is recorded in provenance (`strategy_candidates`). |
+| **Comparator** | How competing candidates are compared: `utility` (pure math over each candidate's stated numbers) or `verify` (one independent reviewer critiques every candidate first, all-or-nothing, then utility arbitrates — for text lenses whose self-reported confidences share no yardstick). |
+| **Regime / context label** | A coarse, descriptive classification of the decision context that gates which strategies compete (investing: `trend`/`range`/`high_vol` from trailing price action). Unknown gates nothing. Recorded in provenance for per-regime outcome analysis (`dde strategy-fit`). |
 
 ## Key invariants
 

@@ -61,11 +61,63 @@ type CachingProvider struct {
 
 	mu      sync.Mutex
 	entries map[string]cacheEntry
+
+	flightMu sync.Mutex
+	inflight map[string]*flight
+}
+
+// flight is one in-progress fetch shared by every concurrent caller of the
+// same key. The strategy selector fans its children out in parallel, so a
+// cold key would otherwise issue N identical vendor requests at once — a
+// pure TTL cache only helps the SECOND decision, singleflight helps the
+// first.
+type flight struct {
+	done chan struct{}
+	e    cacheEntry
+	err  error
 }
 
 // NewCachingProvider wraps next with the cache.
 func NewCachingProvider(next Provider, cfg CacheConfig) *CachingProvider {
-	return &CachingProvider{next: next, cfg: cfg.withDefaults(), entries: map[string]cacheEntry{}}
+	return &CachingProvider{
+		next:     next,
+		cfg:      cfg.withDefaults(),
+		entries:  map[string]cacheEntry{},
+		inflight: map[string]*flight{},
+	}
+}
+
+// once coalesces concurrent fetches of one key: the first caller runs fetch
+// (which also stores per its own policy), everyone else waits for and shares
+// the leader's outcome. Waiters block on the leader's completion rather than
+// their own context — vendor pacing keeps fetches short, and a failed or
+// cancelled leader simply propagates its (uncached, transient) error.
+func (c *CachingProvider) once(key string, fetch func() (cacheEntry, error)) (cacheEntry, error) {
+	c.flightMu.Lock()
+	if f, ok := c.inflight[key]; ok {
+		c.flightMu.Unlock()
+		<-f.done
+		return f.e, f.err
+	}
+	f := &flight{done: make(chan struct{})}
+	c.inflight[key] = f
+	c.flightMu.Unlock()
+
+	// Double-check the cache after winning leadership: this caller may have
+	// missed BEFORE a previous flight stored and retired, and fetching again
+	// would defeat the coalescing it just raced past. A cached negative entry
+	// propagates as its error, matching the ordinary hit path.
+	if e, ok := c.lookup(key); ok {
+		f.e, f.err = e, e.err
+	} else {
+		f.e, f.err = fetch()
+	}
+
+	c.flightMu.Lock()
+	delete(c.inflight, key)
+	c.flightMu.Unlock()
+	close(f.done)
+	return f.e, f.err
 }
 
 // Name implements Provider; the cache is invisible in provenance.
@@ -138,15 +190,26 @@ func (c *CachingProvider) Quote(ctx context.Context, ticker string, asOf time.Ti
 			return e.quote, nil
 		}
 	}
-	q, err := c.next.Quote(ctx, ticker, asOf)
-	if err != nil {
-		if cacheableErr(err) {
-			c.store(key, cacheEntry{err: err}, c.cfg.QuoteTTL)
+	e, err := c.once(key, func() (cacheEntry, error) {
+		q, err := c.next.Quote(ctx, ticker, asOf)
+		if err != nil {
+			if cacheableErr(err) {
+				c.store(key, cacheEntry{err: err}, c.cfg.QuoteTTL)
+			}
+			return cacheEntry{}, err
 		}
+		c.store(key, cacheEntry{quote: q}, c.cfg.QuoteTTL)
+		return cacheEntry{quote: q}, nil
+	})
+	if err != nil {
 		return Quote{}, err
 	}
-	c.store(key, cacheEntry{quote: q}, c.cfg.QuoteTTL)
-	return q, nil
+	// Re-check the lookahead guard: the flight leader may have fetched with a
+	// later asOf in the same TTL bucket than this waiter requested.
+	if e.quote.AsOf.After(asOf) {
+		return c.next.Quote(ctx, ticker, asOf)
+	}
+	return e.quote, nil
 }
 
 // Fundamentals implements Provider.
@@ -163,15 +226,24 @@ func (c *CachingProvider) Fundamentals(ctx context.Context, ticker string, asOf 
 			return e.funds, nil
 		}
 	}
-	f, err := c.next.Fundamentals(ctx, ticker, asOf)
-	if err != nil {
-		if cacheableErr(err) {
-			c.store(key, cacheEntry{err: err}, c.cfg.FundamentalsTTL)
+	e, err := c.once(key, func() (cacheEntry, error) {
+		f, err := c.next.Fundamentals(ctx, ticker, asOf)
+		if err != nil {
+			if cacheableErr(err) {
+				c.store(key, cacheEntry{err: err}, c.cfg.FundamentalsTTL)
+			}
+			return cacheEntry{}, err
 		}
+		c.store(key, cacheEntry{funds: f}, c.cfg.FundamentalsTTL)
+		return cacheEntry{funds: f}, nil
+	})
+	if err != nil {
 		return Fundamentals{}, err
 	}
-	c.store(key, cacheEntry{funds: f}, c.cfg.FundamentalsTTL)
-	return f, nil
+	if e.funds.AsOf.After(asOf) {
+		return c.next.Fundamentals(ctx, ticker, asOf)
+	}
+	return e.funds, nil
 }
 
 // HistoricalBars implements Provider. See the type comment for the caching
@@ -233,17 +305,25 @@ func (c *CachingProvider) barsRange(ctx context.Context, ticker string, from, to
 	if e, ok := c.lookup(key); ok {
 		return e.bars, e.err
 	}
-	bars, err := c.next.HistoricalBars(ctx, ticker, from, to)
-	if err != nil {
-		if cacheableErr(err) {
-			c.store(key, cacheEntry{err: err}, c.cfg.BarsTTL)
+	// The key is day-granular, so concurrent callers of one flight requested
+	// the same fetch range — no per-waiter re-check needed.
+	e, err := c.once(key, func() (cacheEntry, error) {
+		bars, err := c.next.HistoricalBars(ctx, ticker, from, to)
+		if err != nil {
+			if cacheableErr(err) {
+				c.store(key, cacheEntry{err: err}, c.cfg.BarsTTL)
+			}
+			return cacheEntry{}, err
 		}
+		ttl := c.cfg.BarsTTL
+		if to.Before(stable) {
+			ttl = 0 // immutable history: cache without expiry
+		}
+		c.store(key, cacheEntry{bars: bars}, ttl)
+		return cacheEntry{bars: bars}, nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	ttl := c.cfg.BarsTTL
-	if to.Before(stable) {
-		ttl = 0 // immutable history: cache without expiry
-	}
-	c.store(key, cacheEntry{bars: bars}, ttl)
-	return bars, nil
+	return e.bars, nil
 }

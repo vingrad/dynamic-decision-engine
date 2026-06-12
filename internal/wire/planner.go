@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"fmt"
 	"time"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
@@ -39,12 +40,15 @@ type PlannerDeps struct {
 }
 
 // BuildPlannerRouter assembles a per-domain llm.PlannerRouter from the registry
-// (overlaid with policy) and the given dependencies.
+// (overlaid with policy) and the given dependencies. A builder ERROR is a
+// misconfiguration and fails the build — silently degrading to a text planner
+// would mask it; a builder returning a nil planner still declines gracefully
+// (e.g. its data source is not wired) and the domain falls back to guided text.
 //
 // Composition order is load-bearing: Guided(Caching(base)) so the guided planner
 // sets the domain prompt override BEFORE the cache computes its key — otherwise
 // every domain would collide on one cache entry.
-func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps) llm.Planner {
+func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps) (llm.Planner, error) {
 	// rawBase returns the un-cached base planner for a domain: the per-domain
 	// override when configured, else the global Base.
 	rawBase := func(domainID string) llm.Planner {
@@ -74,16 +78,47 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 		return w
 	}
 
+	// textChild builds one prompt-variant strategy child for a text domain.
+	// Composition order is the same load-bearing Guided(Caching(base)): the
+	// variant's combined template becomes the SystemPromptOverride BEFORE the
+	// cache computes its key, so variants cache distinctly. The PromptVersion
+	// is suffixed with the strategy ID so the winning plan's provenance names
+	// its variant (text children all report the base planner's name).
+	textChild := func(d pack.Descriptor, s pack.StrategyDescriptor) llm.Planner {
+		return llm.NewGuidedPlanner(cacheWrap(rawBase(d.ID)), llm.GuidedConfig{
+			PackID:         d.ID,
+			PackVersion:    d.Version,
+			PromptVersion:  d.PromptVersion + "+" + s.ID,
+			PromptTemplate: d.PromptTemplate + "\n\n" + s.PromptTemplate,
+		})
+	}
+
 	routes := map[string]llm.Planner{}
 	for _, id := range reg.IDs() {
 		d, _ := reg.Get(id)
+
+		// Strategy competition is assembled generically for ANY domain that
+		// declares (enabled) strategies — kit children for a registered planner
+		// kind, prompt-variant text children otherwise. A nil planner means the
+		// domain runs without competition and proceeds down the normal paths.
+		if p, err := buildStrategySelector(d, pol, deps, textChild); err != nil {
+			return nil, fmt.Errorf("wire: domain %q: %w", id, err)
+		} else if p != nil {
+			routes[id] = p
+			continue
+		}
 
 		// A domain that declares a PlannerKind is built by the matching registered
 		// builder (e.g. the numeric finance planner). A builder that returns a nil
 		// planner declines (e.g. its data source is not wired), and the domain falls
 		// through to the guided/base text path below — preserving prior behaviour.
+		// A builder ERROR surfaces: it means declared configuration is invalid.
 		if b, ok := plannerBuilders[d.PlannerKind]; ok && d.PlannerKind != "" {
-			if p, err := b(d, pol, deps); err == nil && p != nil {
+			p, err := b(d, pol, deps)
+			if err != nil {
+				return nil, fmt.Errorf("wire: domain %q: %w", id, err)
+			}
+			if p != nil {
 				routes[id] = p
 				continue
 			}
@@ -109,5 +144,5 @@ func BuildPlannerRouter(reg *pack.Registry, pol policy.Policy, deps PlannerDeps)
 	// The default (empty/unknown domain) is the generic, unstamped base — resolved
 	// through the same generic override so empty-domain and explicit-"generic" goals
 	// stay consistent.
-	return llm.NewPlannerRouter(cacheWrap(rawBase(pack.DefaultDomain)), routes)
+	return llm.NewPlannerRouter(cacheWrap(rawBase(pack.DefaultDomain)), routes), nil
 }

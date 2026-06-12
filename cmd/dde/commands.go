@@ -212,7 +212,10 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 	if cfg.FinanceHybrid {
 		deps.FinanceInner = baseFor("investing")
 	}
-	router := wire.BuildPlannerRouter(reg, pol, deps)
+	router, err := wire.BuildPlannerRouter(reg, pol, deps)
+	if err != nil {
+		return nil, err
+	}
 	opts := []engine.Option{
 		engine.WithEvaluatorResolver(wire.NewEvaluatorResolver(reg, pol)),
 		engine.WithGateResolver(wire.NewGateResolver(reg, pol)),
@@ -552,7 +555,10 @@ func newBacktestCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			h := backtest.New(reg, pol, provider)
+			h, err := backtest.New(reg, pol, provider)
+			if err != nil {
+				return err
+			}
 			rep, err := h.Run(cmd.Context(), sc)
 			if err != nil {
 				return err
@@ -643,9 +649,36 @@ func newStrategyFitCommand() *cobra.Command {
 			}
 			defer cleanup()
 
+			pol, err := policy.Load(cfg.PolicyFile)
+			if err != nil {
+				return err
+			}
 			samples, err := svc.StrategySamples(cmd.Context(), domainKey)
 			if err != nil {
 				return err
+			}
+			// Weights are only valid under the comparator they were observed
+			// under: filter the history to the domain's configured mode.
+			mode := "utility"
+			if dp, ok := pol.For(domainKey); ok && dp.Strategy != nil && dp.Strategy.Comparator != "" {
+				mode = dp.Strategy.Comparator
+			}
+			kept := samples[:0]
+			dropped := 0
+			for _, s := range samples {
+				c := s.Comparator
+				if c == "" {
+					c = "utility"
+				}
+				if c == mode {
+					kept = append(kept, s)
+				} else {
+					dropped++
+				}
+			}
+			samples = kept
+			if dropped > 0 {
+				fmt.Fprintf(os.Stderr, "note: skipped %d outcomes recorded under a different comparator than the configured %q\n", dropped, mode)
 			}
 			weights := finance.FitStrategyWeights(samples)
 			if len(samples) < 10 {

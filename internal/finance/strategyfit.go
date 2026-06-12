@@ -1,6 +1,10 @@
 package finance
 
-import "sort"
+import (
+	"sort"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/strategy"
+)
 
 // Outcome-weighted strategy selection, the strategy analogue of calibrate.go:
 // recorded outcomes are folded into per-strategy utility multipliers that the
@@ -15,6 +19,11 @@ type StrategySample struct {
 	Strategy string `json:"strategy" yaml:"strategy"`
 	Regime   Regime `json:"regime" yaml:"regime"`
 	Success  bool   `json:"success" yaml:"success"`
+	// Comparator is the comparison mode the decision ran under ("" reads as
+	// "utility", the mode of every pre-comparator plan). Weights must only be
+	// fitted from samples under ONE comparator — `dde strategy-fit` filters on
+	// the domain's configured mode before calling FitStrategyWeights.
+	Comparator string `json:"comparator,omitempty" yaml:"comparator,omitempty"`
 }
 
 const (
@@ -56,9 +65,9 @@ func FitStrategyWeights(samples []StrategySample) map[string]float64 {
 		if s.Strategy == "" {
 			continue
 		}
-		add(s.Strategy, s.Success)
+		add(strategy.WeightKey(s.Strategy, ""), s.Success)
 		if s.Regime != RegimeUnknown {
-			add(s.Strategy+"@"+string(s.Regime), s.Success)
+			add(strategy.WeightKey(s.Strategy, string(s.Regime)), s.Success)
 		}
 	}
 

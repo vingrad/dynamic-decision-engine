@@ -25,7 +25,11 @@ func newHarness(t *testing.T) *Harness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return New(pack.NewRegistry(), policy.Policy{}, prov)
+	h, err := New(pack.NewRegistry(), policy.Policy{}, prov)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }
 
 func TestScenarioCorpus(t *testing.T) {

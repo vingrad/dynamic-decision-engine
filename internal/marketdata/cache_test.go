@@ -263,3 +263,90 @@ func TestCacheNameDelegates(t *testing.T) {
 		t.Errorf("cache must be invisible in provenance, got %q", c.Name())
 	}
 }
+
+// slowCountingProvider counts vendor calls and blocks each until released,
+// so a test can guarantee genuinely concurrent misses on one key.
+type slowCountingProvider struct {
+	release chan struct{}
+	mu      sync.Mutex
+	quotes  int
+	funds   int
+	bars    int
+}
+
+func (p *slowCountingProvider) Name() string { return "slow-counting" }
+
+func (p *slowCountingProvider) Quote(_ context.Context, ticker string, asOf time.Time) (Quote, error) {
+	<-p.release
+	p.mu.Lock()
+	p.quotes++
+	p.mu.Unlock()
+	return Quote{Ticker: ticker, Price: 100, AsOf: asOf.Add(-time.Minute)}, nil
+}
+
+func (p *slowCountingProvider) Fundamentals(_ context.Context, ticker string, asOf time.Time) (Fundamentals, error) {
+	<-p.release
+	p.mu.Lock()
+	p.funds++
+	p.mu.Unlock()
+	return Fundamentals{Ticker: ticker, PE: 15, AsOf: asOf.Add(-time.Minute)}, nil
+}
+
+func (p *slowCountingProvider) HistoricalBars(_ context.Context, _ string, from, _ time.Time) ([]Bar, error) {
+	<-p.release
+	p.mu.Lock()
+	p.bars++
+	p.mu.Unlock()
+	return []Bar{{Date: from, Close: 100, Volume: 1}}, nil
+}
+
+// TestCacheSingleflight: N concurrent cold-key requests issue exactly ONE
+// vendor call per (method, args). This is what makes the strategy selector's
+// parallel fan-out affordable — a pure TTL cache only helps the second
+// decision; singleflight helps the first.
+func TestCacheSingleflight(t *testing.T) {
+	inner := &slowCountingProvider{release: make(chan struct{})}
+	clock := newTestClock("2026-03-02")
+	c := NewCachingProvider(inner, CacheConfig{
+		QuoteTTL: 15 * time.Minute, FundamentalsTTL: time.Hour, BarsTTL: 15 * time.Minute,
+		Now: clock.Now,
+	})
+
+	asOf := date("2026-03-02")
+	from, to := date("2025-03-02"), asOf
+	const n = 4
+	var wg sync.WaitGroup
+	errs := make(chan error, 3*n)
+	for i := 0; i < n; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			if _, err := c.Quote(context.Background(), "ACME", asOf); err != nil {
+				errs <- err
+			}
+			if _, err := c.Fundamentals(context.Background(), "ACME", asOf); err != nil {
+				errs <- err
+			}
+			if _, err := c.HistoricalBars(context.Background(), "ACME", from, to); err != nil {
+				errs <- err
+			}
+		}()
+	}
+	// Let every goroutine reach its (blocked) flight, then release the leaders.
+	time.Sleep(20 * time.Millisecond)
+	close(inner.release)
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Fatal(err)
+	}
+
+	inner.mu.Lock()
+	defer inner.mu.Unlock()
+	// Bars may split into two day-granular sub-ranges (immutable past + recent
+	// stub), each its own key — so up to 2 fetches, never one per caller.
+	if inner.quotes != 1 || inner.funds != 1 || inner.bars > 2 {
+		t.Errorf("vendor calls quotes=%d funds=%d bars=%d; want 1/1/<=2 for %d concurrent callers",
+			inner.quotes, inner.funds, inner.bars, n)
+	}
+}
