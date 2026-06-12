@@ -187,3 +187,52 @@ func TestFinanceKitDeclineRule(t *testing.T) {
 		t.Errorf("expected the guided text fallback exactly as without strategies: %+v", res.Provenance)
 	}
 }
+
+// TestBuiltInTextPacksDefaultOff: growth and career declare strategy lenses
+// but must remain byte-for-byte single-planner by default — no validation
+// gates have earned their default-on flip. The policy opt-in turns the
+// competition on with a deterministic canonical-order winner under the mock.
+func TestBuiltInTextPacksDefaultOff(t *testing.T) {
+	cases := []struct {
+		domainID   string
+		wantWinner string // canonical first strategy
+	}{
+		{"growth", "expand"},
+		{"career", "mastery"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.domainID, func(t *testing.T) {
+			goal := domain.Goal{Domain: tc.domainID, Objective: "advance"}
+
+			router := mustRouter(t, pack.NewRegistry(), policy.Policy{}, PlannerDeps{Base: llm.NewMockPlanner()})
+			res, err := router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Provenance.Strategy == "selector" {
+				t.Fatalf("%s must not compete by default: %+v", tc.domainID, res.Provenance)
+			}
+
+			on := true
+			pol := policy.Policy{Domains: map[string]policy.DomainPolicy{
+				tc.domainID: {Strategy: &policy.StrategySelection{Enabled: &on}},
+			}}
+			router = mustRouter(t, pack.NewRegistry(), pol, PlannerDeps{Base: llm.NewMockPlanner()})
+			res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Provenance.Strategy != "selector" || len(res.Provenance.StrategyCandidates) != 3 {
+				t.Fatalf("opt-in must compete 3 lenses: %+v", res.Provenance)
+			}
+			// The mock ignores prompt overrides, so all variants tie and the
+			// canonical first lens wins deterministically with no penalty.
+			if res.Provenance.SelectedStrategy != tc.wantWinner {
+				t.Errorf("winner = %q, want canonical %q", res.Provenance.SelectedStrategy, tc.wantWinner)
+			}
+			if res.Provenance.Comparator != "utility" {
+				t.Errorf("default comparator = %q, want utility", res.Provenance.Comparator)
+			}
+		})
+	}
+}
