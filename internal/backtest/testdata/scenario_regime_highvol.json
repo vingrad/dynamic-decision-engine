@@ -1,0 +1,60 @@
+{
+  "name": "ACME high-vol bleed",
+  "start_at": "2026-06-08T00:00:00Z",
+  "fixture_dir": "testdata/regime_highvol",
+  "goal": {
+    "domain": "investing",
+    "objective": "Hold ACME through a violent tape",
+    "metric": "calibrated thesis conviction",
+    "context": {
+      "situation": "ACME rolled over after a long grind up; volatility has exploded.",
+      "assets": [
+        {
+          "name": "ACME",
+          "kind": "ticker",
+          "description": "Primary thesis instrument"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "moderate risk tolerance",
+          "kind": "risk_tolerance"
+        },
+        {
+          "name": "1 year horizon",
+          "kind": "time_horizon"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-06-15T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": -0.03,
+        "window_days": 7
+      }
+    },
+    {
+      "at": "2026-07-13T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": -0.08,
+        "window_days": 7
+      },
+      "should_kill": true
+    },
+    {
+      "at": "2026-08-10T00:00:00Z",
+      "kind": "thesis_break",
+      "payload": {
+        "ticker": "ACME",
+        "reason": "management withdrew full-year guidance"
+      },
+      "should_kill": true
+    }
+  ]
+}

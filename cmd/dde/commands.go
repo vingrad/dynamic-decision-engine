@@ -496,20 +496,13 @@ func newSignalCommand() *cobra.Command {
 func newBacktestCommand() *cobra.Command {
 	var input string
 	var asJSON bool
+	var compareStrategies bool
 	cmd := &cobra.Command{
 		Use:   "backtest",
 		Short: "Replay a signal timeline and report decision-quality metrics (offline)",
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			var sc backtest.Scenario
 			if err := readJSONFile(input, &sc); err != nil {
-				return err
-			}
-			var provOpts []marketdata.OfflineOption
-			if sc.FixtureDir != "" {
-				provOpts = append(provOpts, marketdata.WithFixtureDir(sc.FixtureDir))
-			}
-			provider, err := marketdata.NewOfflineProvider(provOpts...)
-			if err != nil {
 				return err
 			}
 			cfg, err := config.Load()
@@ -521,6 +514,30 @@ func newBacktestCommand() *cobra.Command {
 				return err
 			}
 			reg, err := buildRegistry(cfg)
+			if err != nil {
+				return err
+			}
+
+			// --compare-strategies replays the scenario under every strategy
+			// mode (legacy single, each lens pinned, full selector) and prints
+			// the comparison table instead of a single report.
+			if compareStrategies {
+				cells, err := backtest.RunStrategyMatrix(cmd.Context(), reg, pol, []backtest.Scenario{sc})
+				if err != nil {
+					return err
+				}
+				if asJSON {
+					return printJSON(cells)
+				}
+				backtest.RenderStrategyMatrix(os.Stdout, cells)
+				return nil
+			}
+
+			var provOpts []marketdata.OfflineOption
+			if sc.FixtureDir != "" {
+				provOpts = append(provOpts, marketdata.WithFixtureDir(sc.FixtureDir))
+			}
+			provider, err := marketdata.NewOfflineProvider(provOpts...)
 			if err != nil {
 				return err
 			}
@@ -538,6 +555,8 @@ func newBacktestCommand() *cobra.Command {
 	}
 	cmd.Flags().StringVar(&input, "input", "", "path to a backtest scenario JSON file (required)")
 	cmd.Flags().BoolVar(&asJSON, "json", false, "emit the report as JSON")
+	cmd.Flags().BoolVar(&compareStrategies, "compare-strategies", false,
+		"replay under every strategy mode (single, each lens pinned, selector) and print the comparison table")
 	_ = cmd.MarkFlagRequired("input")
 	return cmd
 }
