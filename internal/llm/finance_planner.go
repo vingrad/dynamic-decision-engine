@@ -36,6 +36,7 @@ type FinancePlanner struct {
 	calibration    *finance.CalibrationCurve
 	strategyID     string
 	priorWeights   finance.PriorWeights
+	confWeights    finance.ScoreWeights
 }
 
 // FinanceConfig configures the finance planner.
@@ -60,6 +61,14 @@ type FinanceConfig struct {
 	// PriorWeights tilts the win-probability prior's components per the strategy
 	// lens. The zero value normalizes to the neutral {1,1,1} blend.
 	PriorWeights finance.PriorWeights
+	// ConfidenceWeights, when set, is the SHARED composite weighting used to
+	// state move confidence — the common yardstick across competing strategy
+	// lenses. A lens still ranks its theses (and buckets impact) with its own
+	// Scoring.Weights; only the stated confidence uses this blend, so two
+	// lenses' confidences are comparable: same scale, different evidence (their
+	// prior tilts and reward:risk genuinely move the sub-scores). Zero means
+	// "use Scoring.Weights" — the single-planner behaviour, bit-for-bit.
+	ConfidenceWeights finance.ScoreWeights
 }
 
 // NewFinancePlanner constructs the planner with sane defaults.
@@ -74,6 +83,9 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 	if cfg.PackID == "" {
 		cfg.PackID = "investing"
 	}
+	if cfg.ConfidenceWeights == (finance.ScoreWeights{}) {
+		cfg.ConfidenceWeights = cfg.Scoring.Weights
+	}
 	return &FinancePlanner{
 		provider:       cfg.Provider,
 		scoring:        cfg.Scoring,
@@ -85,6 +97,7 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 		calibration:    cfg.Calibration,
 		strategyID:     cfg.StrategyID,
 		priorWeights:   cfg.PriorWeights.Normalize(),
+		confWeights:    cfg.ConfidenceWeights,
 	}
 }
 
@@ -145,23 +158,43 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	}
 	scale, aggregate := finance.ScaleToRiskCap(positions, budget.MaxAggregateRiskPct)
 
-	moves := make([]domain.RankedMove, 0, len(theses))
+	type rankedEntry struct {
+		move domain.RankedMove
+		// rankScore is the LENS composite (zero for a broken thesis): the
+		// strategy's own weighting orders its theses, while the stated
+		// confidence may sit on the shared cross-lens yardstick.
+		rankScore float64
+	}
+	entries := make([]rankedEntry, 0, len(theses))
 	for _, th := range theses {
-		moves = append(moves, p.buildMove(th, scale, aggregate, budget.MaxAggregateRiskPct, budgetNote))
+		e := rankedEntry{move: p.buildMove(th, scale, aggregate, budget.MaxAggregateRiskPct, budgetNote)}
+		if !th.broken {
+			e.rankScore = th.score.Composite
+		}
+		entries = append(entries, e)
+	}
+
+	// Rank by the lens composite descending; ties break on the raw stated
+	// confidence, then the stable move key — never on incidental input order.
+	// (For the single planner the composite IS the raw confidence, and any
+	// calibration curve is monotone, so this ordering matches the historical
+	// sort-by-confidence behaviour.)
+	sort.SliceStable(entries, func(i, j int) bool {
+		if entries[i].rankScore != entries[j].rankScore {
+			return entries[i].rankScore > entries[j].rankScore
+		}
+		if entries[i].move.RawConfidence != entries[j].move.RawConfidence {
+			return entries[i].move.RawConfidence > entries[j].move.RawConfidence
+		}
+		return entries[i].move.Key < entries[j].move.Key
+	})
+	moves := make([]domain.RankedMove, 0, len(entries))
+	for _, e := range entries {
+		moves = append(moves, e.move)
 	}
 	if len(moves) == 0 {
 		moves = append(moves, insufficientDataMove(g))
 	}
-
-	// Rank by confidence descending. Calibration can flatten distinct composites
-	// onto one calibrated value, so ties break on the raw (pre-calibration)
-	// confidence — never on incidental input order.
-	sort.SliceStable(moves, func(i, j int) bool {
-		if moves[i].Confidence != moves[j].Confidence {
-			return moves[i].Confidence > moves[j].Confidence
-		}
-		return moves[i].RawConfidence > moves[j].RawConfidence
-	})
 	for i := range moves {
 		moves[i].Rank = i + 1
 	}
@@ -371,8 +404,15 @@ func (p *FinancePlanner) buildMove(th scoredThesis, scale, aggregate, aggregateC
 			scale, aggregate*100, aggregateCap*100)
 	}
 
-	impact, effort, risk := finance.MapToLevels(score)
-	raw := finance.CompositeToConfidence(score.Composite)
+	// Confidence and the impact bucket are stated on the shared yardstick
+	// (confWeights) so competing lenses' claims are comparable — the lens's own
+	// composite orders its theses but must not inflate what it tells the
+	// selector. For the single planner the yardstick IS the lens weighting and
+	// nothing changes.
+	sharedScore := score
+	sharedScore.Composite = finance.Composite(score, p.confWeights)
+	impact, effort, risk := finance.MapToLevels(sharedScore)
+	raw := finance.CompositeToConfidence(sharedScore.Composite)
 	confidence := raw
 	if p.calibration != nil && !p.calibration.Empty() {
 		confidence = p.calibration.Apply(confidence)

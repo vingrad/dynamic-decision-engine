@@ -1,6 +1,11 @@
 package wire
 
 import (
+	"context"
+	"strings"
+	"time"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
@@ -42,6 +47,12 @@ func buildFinancePlanner(d pack.Descriptor, pol policy.Policy, deps PlannerDeps)
 
 	if strategies := activeStrategies(d, pol); selectionEnabled(d, pol) && len(strategies) >= 2 {
 		return buildFinanceSelector(d, pol, deps, provider, strategies)
+	} else if selectionEnabled(d, pol) && len(strategies) == 1 {
+		// Exactly one strategy left (policy disabled the rest): pin that lens as
+		// the single planner — no competition, but the lens's prior tilts and
+		// scoring overlay still apply. This is how a fixed-strategy baseline is
+		// expressed (backtest comparisons, or an operator pinning a lens).
+		return buildFinanceChild(d, pol, deps, provider, strategies[0], deps.FinanceInner), nil
 	}
 
 	cfg := llm.FinanceConfig{
@@ -102,28 +113,12 @@ func activeStrategies(d pack.Descriptor, pol policy.Policy) []pack.StrategyDescr
 // and its hysteresis input (the incumbent strategy) must stay live.
 func buildFinanceSelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, provider marketdata.Provider, strategies []pack.StrategyDescriptor) (llm.Planner, error) {
 	dp, hasPolicy := pol.For(d.ID)
-	base := effectiveScoring(d, pol)
 
 	children := make([]llm.StrategyChild, 0, len(strategies))
 	for _, s := range strategies {
-		params := strategyParams(s, dp, hasPolicy)
-		cfg := llm.FinanceConfig{
-			Provider:       provider,
-			Scoring:        params.Apply(base),
-			Now:            deps.FinanceNow,
-			PackID:         d.ID,
-			PackVersion:    d.Version,
-			PromptTemplate: d.PromptTemplate,
-			StrategyID:     s.ID,
-			PriorWeights:   params.Prior,
-		}
-		if hasPolicy && dp.Calibration != nil {
-			cfg.Calibration = dp.Calibration
-		}
-		child := llm.Planner(llm.NewFinancePlanner(cfg))
-		if deps.FinanceCache != nil {
-			child = llm.NewCachingPlanner(child, deps.FinanceCache, deps.CacheObs)
-		}
+		// Children carry no narrator: narration runs once on the winner, inside
+		// the selector.
+		child := buildFinanceChild(d, pol, deps, provider, s, nil)
 		children = append(children, llm.StrategyChild{ID: s.ID, Planner: child, Regimes: s.Regimes})
 	}
 
@@ -131,6 +126,7 @@ func buildFinanceSelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps
 		Children:       children,
 		Inner:          deps.FinanceInner,
 		PromptTemplate: d.PromptTemplate,
+		Regime:         financeRegimeFn(provider, deps.FinanceNow),
 	}
 	if hasPolicy && dp.Strategy != nil {
 		selCfg.Weights = dp.Strategy.Weights
@@ -139,6 +135,64 @@ func buildFinanceSelector(d pack.Descriptor, pol policy.Policy, deps PlannerDeps
 		}
 	}
 	return llm.NewSelectorPlanner(selCfg)
+}
+
+// buildFinanceChild builds one strategy lens as a finance planner: the lens's
+// params overlay the domain's base scoring, its prior tilts apply, and its
+// strategy-suffixed name keys the TTL cache separately per lens.
+func buildFinanceChild(d pack.Descriptor, pol policy.Policy, deps PlannerDeps, provider marketdata.Provider, s pack.StrategyDescriptor, inner llm.Planner) llm.Planner {
+	dp, hasPolicy := pol.For(d.ID)
+	params := strategyParams(s, dp, hasPolicy)
+	base := effectiveScoring(d, pol).Normalize()
+	cfg := llm.FinanceConfig{
+		Provider:       provider,
+		Scoring:        params.Apply(base),
+		Inner:          inner,
+		Now:            deps.FinanceNow,
+		PackID:         d.ID,
+		PackVersion:    d.Version,
+		PromptTemplate: d.PromptTemplate,
+		StrategyID:     s.ID,
+		PriorWeights:   params.Prior,
+		// All lenses state confidence on the domain's BASE weighting, so the
+		// selector compares like with like (same scale, different evidence).
+		ConfidenceWeights: base.Weights,
+	}
+	if hasPolicy && dp.Calibration != nil {
+		cfg.Calibration = dp.Calibration
+	}
+	child := llm.Planner(llm.NewFinancePlanner(cfg))
+	if deps.FinanceCache != nil {
+		child = llm.NewCachingPlanner(child, deps.FinanceCache, deps.CacheObs)
+	}
+	return child
+}
+
+// financeRegimeFn classifies the goal-level market regime from one year of
+// point-in-time bars per ticker asset, as of the (possibly simulated) clock.
+// Fetch failures and thin history simply leave that ticker unknown — an
+// unknown regime gates nothing, so degraded data can only widen the field,
+// never narrow it. The regime is recorded in provenance either way, which is
+// what makes per-regime outcome fitting possible later.
+func financeRegimeFn(provider marketdata.Provider, now func() time.Time) llm.RegimeFn {
+	if now == nil {
+		now = time.Now
+	}
+	return func(ctx context.Context, g domain.Goal) (string, error) {
+		asOf := now()
+		var readings []finance.RegimeReading
+		for _, a := range g.Context.Assets {
+			if !strings.EqualFold(a.Kind, "ticker") {
+				continue
+			}
+			bars, err := provider.HistoricalBars(ctx, strings.ToUpper(strings.TrimSpace(a.Name)), asOf.AddDate(-1, 0, 0), asOf)
+			if err != nil {
+				continue
+			}
+			readings = append(readings, finance.ClassifyRegime(bars))
+		}
+		return string(finance.CombineRegimes(readings)), nil
+	}
 }
 
 // strategyParams resolves one strategy's numeric tuning: a policy override
