@@ -34,6 +34,8 @@ type FinancePlanner struct {
 	packVersion    string
 	promptTemplate string
 	calibration    *finance.CalibrationCurve
+	strategyID     string
+	priorWeights   finance.PriorWeights
 }
 
 // FinanceConfig configures the finance planner.
@@ -50,6 +52,14 @@ type FinanceConfig struct {
 	// Calibration, when non-nil and fitted, maps stated confidence onto observed
 	// outcome frequency (see finance.FitCalibration). Nil/empty is the identity.
 	Calibration *finance.CalibrationCurve
+	// StrategyID names the strategy lens this planner instance embodies (e.g.
+	// "value"). It suffixes Name() — and therefore the plan cache key — so two
+	// strategy variants can never collide on one cache entry. Empty means the
+	// single blended planner, whose name stays exactly "finance".
+	StrategyID string
+	// PriorWeights tilts the win-probability prior's components per the strategy
+	// lens. The zero value normalizes to the neutral {1,1,1} blend.
+	PriorWeights finance.PriorWeights
 }
 
 // NewFinancePlanner constructs the planner with sane defaults.
@@ -73,11 +83,20 @@ func NewFinancePlanner(cfg FinanceConfig) *FinancePlanner {
 		packVersion:    cfg.PackVersion,
 		promptTemplate: cfg.PromptTemplate,
 		calibration:    cfg.Calibration,
+		strategyID:     cfg.StrategyID,
+		priorWeights:   cfg.PriorWeights.Normalize(),
 	}
 }
 
-// Name implements Planner.
-func (*FinancePlanner) Name() string { return "finance" }
+// Name implements Planner. A strategy variant is named "finance:<strategy>" so
+// the strategy enters provenance and the plan cache key; the plain planner
+// stays "finance".
+func (p *FinancePlanner) Name() string {
+	if p.strategyID == "" {
+		return "finance"
+	}
+	return "finance:" + p.strategyID
+}
 
 const financeDisclaimer = "Educational decision-support only. Not financial advice. Not a recommendation to buy or sell any security."
 
@@ -179,7 +198,7 @@ func (p *FinancePlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pla
 	prov := domain.DecisionProvenance{
 		ReasoningSummary: reasoning,
 		InputSnapshotID:  inputSnapshotID(g, req.SignalNote),
-		Planner:          "finance",
+		Planner:          p.Name(),
 		PromptVersion:    financePromptVersion,
 		Model:            "none",
 		Strategy:         "single",
@@ -241,7 +260,7 @@ func (p *FinancePlanner) scoreThesis(ctx context.Context, ticker string, g domai
 	// every candidate).
 	winProb := 0.5
 	informed := false
-	if prior, ok := finance.WinProbPrior(funds, returns); ok {
+	if prior, ok := finance.WinProbPriorWeighted(finance.ComputePriorTilts(funds, returns), p.priorWeights); ok {
 		winProb = prior
 		informed = true
 	}
