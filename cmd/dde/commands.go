@@ -136,15 +136,26 @@ func domainBaseResolver(cfg config.Config, pol policy.Policy, globalBase llm.Pla
 }
 
 // newProvider builds the market-data provider for the finance planner. Offline
-// (embedded fixtures, no network) is the default; "http" selects the vendor stub.
+// (embedded fixtures, no network) is the default; "http" builds the configured
+// vendor chain wrapped in a TTL cache. A vendor that needs a key but has none
+// fails here, so a misconfigured serve refuses to start instead of silently
+// degrading.
 func newProvider(cfg config.Config) (marketdata.Provider, error) {
-	if cfg.MarketDataProvider == "http" {
-		return marketdata.NewHTTPProvider(marketdata.HTTPConfig{
-			APIKey: os.Getenv("DDE_MARKETDATA_API_KEY"),
-			Vendor: cfg.MarketDataVendor,
-		}), nil
+	if cfg.MarketDataProvider != "http" {
+		return marketdata.NewOfflineProvider()
 	}
-	return marketdata.NewOfflineProvider()
+	chain, err := marketdata.NewChainFromSpec(cfg.MarketDataVendor, marketdata.VendorConfig{
+		APIKey:  os.Getenv("DDE_MARKETDATA_API_KEY"),
+		BaseURL: cfg.MarketDataBaseURL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	return marketdata.NewCachingProvider(chain, marketdata.CacheConfig{
+		QuoteTTL:        cfg.MarketDataQuoteTTL,
+		FundamentalsTTL: cfg.MarketDataFundamentalsTTL,
+		BarsTTL:         cfg.MarketDataBarsTTL,
+	}), nil
 }
 
 // marketDataSources wraps a market-data provider as the wire DataSources registry

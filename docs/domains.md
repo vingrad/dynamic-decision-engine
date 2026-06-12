@@ -80,8 +80,59 @@ standard materiality evaluator picks up as a material change → a new plan vers
 The finance planner reads market data through `internal/marketdata.Provider`.
 Every read takes an `asOf` timestamp and returns only data known at or before it —
 so backtests cannot peek at the future. The default `OfflineProvider` serves
-embedded JSON fixtures (no network, CI-safe); a real HTTP vendor is stubbed behind
-the same interface. Select with `DDE_MARKETDATA_PROVIDER=offline|http`.
+embedded JSON fixtures (no network, CI-safe). Select with
+`DDE_MARKETDATA_PROVIDER=offline|http`.
+
+### Real vendors (BYOK)
+
+`DDE_MARKETDATA_PROVIDER=http` enables real vendors. `DDE_MARKETDATA_VENDOR` is a
+comma-separated **chain** tried in order per read — a vendor that can't serve a
+request (capability gap, missing ticker, rate limit, outage) falls through to the
+next, and the composed chain name (`fmp+stooq`) lands in provenance:
+
+```bash
+DDE_MARKETDATA_PROVIDER=http \
+DDE_MARKETDATA_VENDOR=fmp,stooq \
+DDE_MARKETDATA_API_KEY=your-fmp-key \
+dde serve
+```
+
+| Vendor | Quotes | Fundamentals | Daily bars | Key | Free tier |
+| --- | --- | --- | --- | --- | --- |
+| `fmp` (Financial Modeling Prep) | ✅ | ✅ latest-only | ✅ | `DDE_MARKETDATA_API_KEY` | ~250 req/day, US tickers, non-commercial |
+| `stooq` | ✅ (bar-derived) | — | ✅ | none | keyless EOD CSV; engine paces 1 req/s; their anti-bot check may block non-browser clients (the chain then degrades) |
+| `alphavantage`, `tiingo` | placeholders (selectable, return not-implemented) | | | | |
+
+**Bring your own paid key for production use.** Free tiers are for development
+and demos and are typically restricted to non-commercial use by the vendor's
+terms. A vendor that needs a key but has none fails at startup (no silent
+degradation); use `DDE_MARKETDATA_VENDOR=stooq` for a fully keyless setup.
+
+All vendor reads go through an in-process TTL cache, so the planner's repeated
+reads don't burn the daily request budget: quotes default to 15m
+(`DDE_MARKETDATA_QUOTE_TTL`), fundamentals to 24h
+(`DDE_MARKETDATA_FUNDAMENTALS_TTL`); a TTL of 0 disables that cache. Bar ranges
+are split at the start of *yesterday*: the older chunk is immutable history
+cached without expiry (with that one-day grace, a vendor that backfills EOD
+bars late can't freeze an incomplete series), while the yesterday/today stub
+expires on `DDE_MARKETDATA_BARS_TTL` — so refreshing a year-long window
+refetches two days, not the year. FMP is additionally paced (250ms between
+requests, 240/day budget; cancelled waits are refunded) so a hot loop can't
+exhaust the key.
+
+**Point-in-time honesty.** Daily bars satisfy the as-of contract everywhere, and
+a past-`asOf` quote is derived from bars (never the live quote endpoint). But
+free vendors have no *historical* fundamentals: a live read returns the current
+snapshot tagged `"freshness": "latest_only"`, and a past-`asOf` read is refused
+(`ErrNotSupported`) rather than served with today's values. The planner already
+tolerates missing fundamentals, so nothing breaks — but this is why **backtests
+must stay on the offline fixtures** (they do by default: the backtest harness
+wires `OfflineProvider` directly and never touches HTTP vendors).
+
+Adding a vendor is one adapter file implementing `Provider` plus one line in the
+registry (`internal/marketdata/vendors.go`); the conformance test suite in
+`conformance_test.go` runs the shared point-in-time contract against every
+implementation.
 
 ## External data sources (live context)
 

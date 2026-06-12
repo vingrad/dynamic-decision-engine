@@ -77,12 +77,34 @@ func TestOfflineHistoricalBarsRange(t *testing.T) {
 	}
 }
 
-func TestHTTPProviderStub(t *testing.T) {
-	p := NewHTTPProvider(HTTPConfig{Vendor: "alphavantage"})
+func TestVendorRegistryPlaceholders(t *testing.T) {
+	// Backward compat: a registered-but-unintegrated vendor stays selectable and
+	// keeps the stub's behavior (ErrNotImplemented, planner degrades).
+	p, err := NewVendor("alphavantage", VendorConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
 	if p.Name() != "http:alphavantage" {
 		t.Errorf("unexpected name %q", p.Name())
 	}
 	if _, err := p.Quote(context.Background(), "ACME", time.Now()); !errors.Is(err, ErrNotImplemented) {
 		t.Errorf("expected ErrNotImplemented, got %v", err)
+	}
+}
+
+func TestNewVendorUnknown(t *testing.T) {
+	if _, err := NewVendor("nope", VendorConfig{}); err == nil {
+		t.Fatal("expected error for unknown vendor")
+	}
+}
+
+func TestOfflineFundamentalsFreshness(t *testing.T) {
+	p := mustOffline(t)
+	f, err := p.Fundamentals(context.Background(), "ACME", date("2026-06-01T00:00:00Z"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Freshness != FreshnessPointInTime {
+		t.Errorf("offline fundamentals must be point-in-time, got %q", f.Freshness)
 	}
 }

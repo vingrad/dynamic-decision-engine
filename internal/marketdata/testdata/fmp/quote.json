@@ -1,0 +1,11 @@
+[
+  {
+    "symbol": "ACME",
+    "price": 110.5,
+    "eps": 5.5,
+    "pe": 20.09,
+    "marketCap": 1105000000,
+    "avgVolume": 2000000,
+    "timestamp": 1771200000
+  }
+]

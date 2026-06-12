@@ -108,3 +108,42 @@ func TestValidateRejectsBadReplanKnobs(t *testing.T) {
 		t.Error("expected error for negative replan_max_retries")
 	}
 }
+
+func TestValidateMarketDataVendors(t *testing.T) {
+	c := Default()
+	c.MarketDataProvider = "http"
+	if err := c.Validate(); err != nil {
+		t.Errorf("default vendor chain must validate, got %v", err)
+	}
+
+	c.MarketDataVendor = "fmp, stooq"
+	if err := c.Validate(); err != nil {
+		t.Errorf("spaced vendor chain must validate, got %v", err)
+	}
+	if got := c.MarketDataVendors(); len(got) != 2 || got[0] != "fmp" || got[1] != "stooq" {
+		t.Errorf("MarketDataVendors() = %v, want [fmp stooq]", got)
+	}
+
+	c.MarketDataVendor = "fmp,bloomberg"
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for unknown vendor")
+	}
+
+	c.MarketDataVendor = " , "
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for empty vendor chain")
+	}
+
+	// Vendors are not validated when the provider is offline.
+	c = Default()
+	c.MarketDataVendor = "bloomberg"
+	if err := c.Validate(); err != nil {
+		t.Errorf("offline provider must ignore vendor names, got %v", err)
+	}
+
+	c = Default()
+	c.MarketDataQuoteTTL = -time.Second
+	if err := c.Validate(); err == nil {
+		t.Error("expected error for negative quote TTL")
+	}
+}
