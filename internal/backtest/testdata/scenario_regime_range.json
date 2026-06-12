@@ -1,0 +1,61 @@
+{
+  "name": "ACME range-bound value",
+  "start_at": "2026-06-08T00:00:00Z",
+  "fixture_dir": "testdata/regime_range",
+  "goal": {
+    "domain": "investing",
+    "objective": "Accumulate cheap ACME while the tape goes nowhere",
+    "metric": "calibrated thesis conviction",
+    "context": {
+      "situation": "ACME has oscillated in a band for a year while earnings stayed strong.",
+      "assets": [
+        {
+          "name": "ACME",
+          "kind": "ticker",
+          "description": "Primary thesis instrument"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "moderate risk tolerance",
+          "kind": "risk_tolerance"
+        },
+        {
+          "name": "1 year horizon",
+          "kind": "time_horizon"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2026-06-22T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": 0.035,
+        "window_days": 7
+      }
+    },
+    {
+      "at": "2026-07-20T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": -0.04,
+        "window_days": 7
+      }
+    },
+    {
+      "at": "2026-08-17T00:00:00Z",
+      "kind": "valuation_change",
+      "payload": {
+        "ticker": "ACME",
+        "metric": "pe",
+        "value": 11.0,
+        "fair_value": 13.0,
+        "gap_pct": 0.18
+      }
+    }
+  ]
+}

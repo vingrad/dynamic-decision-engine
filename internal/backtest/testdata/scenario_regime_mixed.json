@@ -1,0 +1,68 @@
+{
+  "name": "ACME trend into crash",
+  "start_at": "2025-11-03T00:00:00Z",
+  "fixture_dir": "testdata/regime_mixed",
+  "goal": {
+    "domain": "investing",
+    "objective": "Stay long ACME while the trend holds",
+    "metric": "calibrated thesis conviction",
+    "context": {
+      "situation": "A year-long uptrend is showing its first cracks.",
+      "assets": [
+        {
+          "name": "ACME",
+          "kind": "ticker",
+          "description": "Primary thesis instrument"
+        }
+      ],
+      "constraints": [
+        {
+          "name": "moderate risk tolerance",
+          "kind": "risk_tolerance"
+        },
+        {
+          "name": "1 year horizon",
+          "kind": "time_horizon"
+        }
+      ]
+    }
+  },
+  "events": [
+    {
+      "at": "2025-11-17T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": 0.02,
+        "window_days": 7
+      }
+    },
+    {
+      "at": "2025-12-15T00:00:00Z",
+      "kind": "macro",
+      "payload": {
+        "note": "soft landing consensus holds"
+      }
+    },
+    {
+      "at": "2026-07-27T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": -0.09,
+        "window_days": 21
+      },
+      "should_kill": true
+    },
+    {
+      "at": "2026-08-31T00:00:00Z",
+      "kind": "price_move",
+      "payload": {
+        "ticker": "ACME",
+        "pct_change": -0.13,
+        "window_days": 35
+      },
+      "should_kill": true
+    }
+  ]
+}

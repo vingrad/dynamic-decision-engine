@@ -22,8 +22,9 @@ type DecisionProvenance struct {
 	PackID      string `json:"pack_id,omitempty"`
 	PackVersion string `json:"pack_version,omitempty"`
 
-	// Strategy is the planning strategy: "single" for one model, or "verify",
-	// "route", "ensemble" for multi-model compositions. Empty is treated as single.
+	// Strategy is the planning strategy: "single" for one model, "verify",
+	// "route", "ensemble" for multi-model compositions, or "selector" when named
+	// domain strategies competed and one was selected. Empty is treated as single.
 	Strategy string `json:"strategy,omitempty"`
 	// Contributors records every model that participated and its role, so a
 	// multi-model decision is auditable end to end.
@@ -32,12 +33,39 @@ type DecisionProvenance struct {
 	// flags, agreement summary, or an escalation reason.
 	Notes string `json:"notes,omitempty"`
 
+	// SelectedStrategy names the domain strategy whose candidate plan won the
+	// selection (e.g. "momentum"). Set only when Strategy == "selector".
+	SelectedStrategy string `json:"selected_strategy,omitempty"`
+	// Regime is the market-regime label in effect when strategies were gated
+	// ("trend", "range", "high_vol"); empty when unknown or not classified. It is
+	// recorded even when gating changed nothing, so per-regime outcome analysis
+	// stays possible after the fact.
+	Regime string `json:"regime,omitempty"`
+	// StrategyCandidates is the audit trail of the strategy competition: every
+	// candidate that ran, its utility score, and why the losers lost (or were
+	// filtered). Present only when Strategy == "selector".
+	StrategyCandidates []StrategyCandidate `json:"strategy_candidates,omitempty"`
+
 	// SourceContributions records every external data source consulted before
 	// planning: its identity, when it was fetched, the verbatim payload, and
 	// whether the data was stale. The fetched data itself is folded into the goal
 	// Context (and so into the input snapshot); this field is the audit trail of
 	// where it came from. Empty when no sources were wired (offline / mock).
 	SourceContributions []SourceContribution `json:"source_contributions,omitempty"`
+}
+
+// StrategyCandidate is the audit record for one strategy's candidate plan in a
+// selection: its identity, its goal-derived utility (and the outcome weight
+// applied), its top recommendation, and — when it lost or was filtered — why.
+type StrategyCandidate struct {
+	StrategyID    string  `json:"strategy_id"`
+	Planner       string  `json:"planner"`
+	UtilityScore  float64 `json:"utility_score"`
+	Weight        float64 `json:"weight,omitempty"`
+	TopMoveKey    string  `json:"top_move_key,omitempty"`
+	TopConfidence float64 `json:"top_confidence,omitempty"`
+	Filtered      bool    `json:"filtered,omitempty"`
+	Reason        string  `json:"reason,omitempty"`
 }
 
 // SourceContribution is the audit record for one external data source consulted

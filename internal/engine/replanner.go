@@ -37,7 +37,7 @@ func (e *Engine) Replan(ctx context.Context, goal domain.Goal, current domain.Pl
 	// Enrich after the gate so a signal the domain ignores never pays for a fetch.
 	goal, contribs := e.enrich(ctx, goal, signalKind, signalPayload)
 
-	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote, SignalKind: signalKind, SignalPayload: signalPayload, CurrentMoves: current.RankedMoves})
+	res, err := e.planner.GeneratePlan(ctx, llm.PlanRequest{Goal: goal, SignalNote: signalNote, SignalKind: signalKind, SignalPayload: signalPayload, CurrentMoves: current.RankedMoves, CurrentStrategy: current.Provenance.SelectedStrategy})
 	if err != nil {
 		return ReplanResult{}, fmt.Errorf("engine: replan: %w", err)
 	}

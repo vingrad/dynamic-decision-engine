@@ -531,6 +531,90 @@ func (s *Service) CalibrationSamples(ctx context.Context, domainKey string) ([]f
 	}
 }
 
+// StrategySamples pairs every decisive recorded outcome for goals in the given
+// domain with the strategy that won the plan version it addresses (and the
+// market regime recorded at plan time). Plans that predate the strategy
+// selector — no SelectedStrategy in provenance — contribute nothing. The
+// samples feed finance.FitStrategyWeights (`dde strategy-fit`).
+func (s *Service) StrategySamples(ctx context.Context, domainKey string) ([]finance.StrategySample, error) {
+	var samples []finance.StrategySample
+	page := storage.Page{Limit: storage.MaxPageLimit}
+	for {
+		goals, err := s.repo.ListGoals(ctx, storage.GoalFilter{}, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, g := range goals {
+			if g.Domain != domainKey {
+				continue
+			}
+			gs, err := s.goalStrategySamples(ctx, g.ID)
+			if err != nil {
+				return nil, err
+			}
+			samples = append(samples, gs...)
+		}
+		if len(goals) < page.Limit {
+			return samples, nil
+		}
+		page.Offset += page.Limit
+	}
+}
+
+func (s *Service) goalStrategySamples(ctx context.Context, goalID string) ([]finance.StrategySample, error) {
+	plan, err := s.repo.GetPlanByGoal(ctx, goalID)
+	if err != nil {
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil, nil // goal never planned; nothing to learn from
+		}
+		return nil, err
+	}
+
+	var samples []finance.StrategySample
+	versions := map[int]domain.PlanVersion{}
+	page := storage.Page{Limit: storage.MaxPageLimit}
+	for {
+		outcomes, err := s.repo.ListOutcomes(ctx, goalID, page)
+		if err != nil {
+			return nil, err
+		}
+		for _, o := range outcomes {
+			var success bool
+			switch o.Result {
+			case domain.OutcomeSuccess:
+				success = true
+			case domain.OutcomeFailure:
+				success = false
+			default:
+				continue // partial/inconclusive carry no binary label
+			}
+			v, ok := versions[o.PlanVersion]
+			if !ok {
+				v, err = s.repo.GetPlanVersion(ctx, plan.ID, o.PlanVersion)
+				if err != nil {
+					if errors.Is(err, storage.ErrNotFound) {
+						continue
+					}
+					return nil, err
+				}
+				versions[o.PlanVersion] = v
+			}
+			if v.Provenance.SelectedStrategy == "" {
+				continue // pre-selector plan: no strategy to attribute
+			}
+			samples = append(samples, finance.StrategySample{
+				Strategy: v.Provenance.SelectedStrategy,
+				Regime:   finance.Regime(v.Provenance.Regime),
+				Success:  success,
+			})
+		}
+		if len(outcomes) < page.Limit {
+			return samples, nil
+		}
+		page.Offset += page.Limit
+	}
+}
+
 func (s *Service) goalCalibrationSamples(ctx context.Context, goalID string) ([]finance.CalibrationSample, error) {
 	plan, err := s.repo.GetPlanByGoal(ctx, goalID)
 	if err != nil {

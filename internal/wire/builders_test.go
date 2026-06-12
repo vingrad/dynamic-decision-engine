@@ -5,7 +5,9 @@ import (
 	"testing"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
+	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 )
@@ -64,5 +66,115 @@ func TestFinanceBuilderDeclinesWithoutDataSource(t *testing.T) {
 	inv := plan(t, router, "investing")
 	if inv.Provenance.Planner != "mock" || inv.Provenance.PackID != "investing" {
 		t.Errorf("investing without market data should fall back to guided base: %+v", inv.Provenance)
+	}
+}
+
+// TestFinanceSelectorBuildsWhenEnabled verifies the strategy competition seam:
+// with strategies declared on the pack and policy enabling selection, the
+// investing route is a selector whose provenance records every candidate; with
+// the policy absent the route stays the single finance planner, byte-for-byte.
+func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
+	provider, err := marketdata.NewOfflineProvider()
+	if err != nil {
+		t.Fatal(err)
+	}
+	deps := PlannerDeps{
+		Base:        llm.NewMockPlanner(),
+		DataSources: map[string]DataSource{marketDataKey: provider},
+	}
+	goal := domain.Goal{
+		Domain:    "investing",
+		Objective: "grow",
+		Context: domain.Context{
+			Assets: []domain.Asset{{Name: "ACME", Kind: "ticker"}},
+		},
+	}
+
+	// Policy off-switch: explicit enabled:false restores the single planner,
+	// byte-for-byte the legacy provenance.
+	off := false
+	polOff := policy.Policy{Domains: map[string]policy.DomainPolicy{
+		"investing": {Strategy: &policy.StrategySelection{Enabled: &off}},
+	}}
+	router := BuildPlannerRouter(pack.NewRegistry(), polOff, deps)
+	res, err := router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.Planner != "finance" || res.Provenance.Strategy != "single" {
+		t.Errorf("with selection off the single finance planner must serve: %+v", res.Provenance)
+	}
+
+	// Default (no policy): the pack declares strategies, so the selector serves
+	// and candidates are recorded.
+	on := true
+	router = BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, deps)
+	res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Provenance.Strategy != "selector" {
+		t.Fatalf("expected selector provenance, got %+v", res.Provenance)
+	}
+	if res.Provenance.SelectedStrategy == "" || len(res.Provenance.StrategyCandidates) != 3 {
+		t.Errorf("expected a winner among 3 candidates, got %q / %d",
+			res.Provenance.SelectedStrategy, len(res.Provenance.StrategyCandidates))
+	}
+	for _, c := range res.Provenance.StrategyCandidates {
+		if c.Planner != "finance:"+c.StrategyID {
+			t.Errorf("child planner name %q must carry its strategy id %q", c.Planner, c.StrategyID)
+		}
+	}
+
+	// Disabling a strategy removes it from the field.
+	pol := policy.Policy{Domains: map[string]policy.DomainPolicy{}}
+	pol.Domains["investing"] = policy.DomainPolicy{Strategy: &policy.StrategySelection{
+		Enabled: &on, Disable: []string{"momentum"},
+	}}
+	router = BuildPlannerRouter(pack.NewRegistry(), pol, deps)
+	res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Provenance.StrategyCandidates) != 2 {
+		t.Errorf("disabling momentum should leave 2 candidates, got %d", len(res.Provenance.StrategyCandidates))
+	}
+}
+
+// TestPolicyStrategyParamsMergeKeepsPrior: a policy that tunes one knob of a
+// lens must not strip the lens's prior tilts — the regression here was a
+// wholesale replacement whose zero Prior normalized to the neutral blend.
+func TestPolicyStrategyParamsMergeKeepsPrior(t *testing.T) {
+	reg := pack.NewRegistry()
+	d, _ := reg.Get("investing")
+	pol := policy.Policy{Domains: map[string]policy.DomainPolicy{
+		"investing": {Strategy: &policy.StrategySelection{
+			Params: map[string]*finance.StrategyParams{
+				"momentum": {RiskScale: finance.RiskScale{Kelly: 0.8}},
+			},
+		}},
+	}}
+	dp, ok := pol.For("investing")
+	if !ok {
+		t.Fatal("policy lookup failed")
+	}
+
+	var momentum pack.StrategyDescriptor
+	for _, s := range d.Strategies {
+		if s.ID == "momentum" {
+			momentum = s
+		}
+	}
+	declared := momentum.Scoring.(*finance.StrategyParams)
+
+	got := strategyParams(momentum, dp, true)
+	if got.Prior != declared.Prior {
+		t.Errorf("partial policy override stripped the prior: got %+v, want %+v", got.Prior, declared.Prior)
+	}
+	if got.RewardRiskRatio != declared.RewardRiskRatio {
+		t.Errorf("reward:risk lost: got %v, want %v", got.RewardRiskRatio, declared.RewardRiskRatio)
+	}
+	if got.RiskScale.Kelly != 0.8 {
+		t.Errorf("the overridden knob must apply, got %v", got.RiskScale.Kelly)
 	}
 }

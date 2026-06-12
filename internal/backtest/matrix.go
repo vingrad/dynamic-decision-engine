@@ -7,7 +7,6 @@ import (
 	"sort"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/finance"
-	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 )
@@ -32,22 +31,7 @@ func RunMatrix(ctx context.Context, reg *pack.Registry, basePol policy.Policy, s
 	}
 	sort.Strings(names)
 
-	providers := map[string]marketdata.Provider{}
-	providerFor := func(fixtureDir string) (marketdata.Provider, error) {
-		if p, ok := providers[fixtureDir]; ok {
-			return p, nil
-		}
-		var opts []marketdata.OfflineOption
-		if fixtureDir != "" {
-			opts = append(opts, marketdata.WithFixtureDir(fixtureDir))
-		}
-		p, err := marketdata.NewOfflineProvider(opts...)
-		if err != nil {
-			return nil, err
-		}
-		providers[fixtureDir] = p
-		return p, nil
-	}
+	providerFor := fixtureProviders()
 
 	var cells []MatrixCell
 	for _, name := range names {

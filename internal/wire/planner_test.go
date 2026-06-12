@@ -66,10 +66,14 @@ func TestBuildPlannerRouterRoutes(t *testing.T) {
 		FinanceNow:  func() time.Time { return time.Date(2026, 3, 15, 0, 0, 0, 0, time.UTC) },
 	})
 
-	// Investing -> finance planner (numeric), provenance reflects it.
+	// Investing -> finance strategy selector (the pack declares strategies and
+	// the competition is on by default), provenance reflects the competition.
 	inv := plan(t, router, "investing")
-	if inv.Provenance.Planner != "finance" || inv.Provenance.PackID != "investing" {
-		t.Errorf("investing should route to finance: %+v", inv.Provenance)
+	if inv.Provenance.Strategy != "selector" || inv.Provenance.PackID != "investing" {
+		t.Errorf("investing should route to the strategy selector: %+v", inv.Provenance)
+	}
+	if inv.Provenance.SelectedStrategy == "" || len(inv.Provenance.StrategyCandidates) == 0 {
+		t.Errorf("selector provenance must record the competition: %+v", inv.Provenance)
 	}
 
 	// Generic -> base, no pack stamp (byte-for-byte preserved).

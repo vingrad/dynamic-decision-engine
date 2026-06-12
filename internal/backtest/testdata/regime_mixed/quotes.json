@@ -1,0 +1,430 @@
+{
+ "ACME": [
+  {
+   "ticker": "ACME",
+   "price": 70.0,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-06-02T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 70.7,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-06-09T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 71.41,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-06-16T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 72.12,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-06-23T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 72.84,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-06-30T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 73.57,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-07-07T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 74.31,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-07-14T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 75.05,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-07-21T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 75.8,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-07-28T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 76.56,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-08-04T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 77.32,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-08-11T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 78.1,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-08-18T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 78.88,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-08-25T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 79.67,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-09-01T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 80.46,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-09-08T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 81.27,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-09-15T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 82.08,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-09-22T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 82.9,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-09-29T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 83.73,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-10-06T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 84.57,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-10-13T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 85.41,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-10-20T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 86.27,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-10-27T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 87.13,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-11-03T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 88.0,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-11-10T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 88.88,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-11-17T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 89.77,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-11-24T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 90.67,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-12-01T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 91.57,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-12-08T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 92.49,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-12-15T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 93.42,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-12-22T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.35,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2025-12-29T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 95.29,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-01-05T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 96.25,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-01-12T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 97.21,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-01-19T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 98.18,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-01-26T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 99.16,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-02-02T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 100.15,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-02-09T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 101.16,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-02-16T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 102.17,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-02-23T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 103.19,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-03-02T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 104.22,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-03-09T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 105.26,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-03-16T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 106.32,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-03-23T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 107.38,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-03-30T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 108.45,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-04-06T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 109.54,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-04-13T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 110.63,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-04-20T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 111.74,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-04-27T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 112.86,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-05-04T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 113.98,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-05-11T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 115.12,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-05-18T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 116.28,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-05-25T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 117.44,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-06-01T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 118.61,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-06-08T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 119.8,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-06-15T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 121.0,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-06-22T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 117.37,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-06-29T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 113.85,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-07-06T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 110.43,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-07-13T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 107.12,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-07-20T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 103.9,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-07-27T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 100.79,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-08-03T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 97.76,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-08-10T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-08-17T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-08-24T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-08-31T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-09-07T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-09-14T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-09-21T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-09-28T00:00:00Z"
+  },
+  {
+   "ticker": "ACME",
+   "price": 94.83,
+   "avg_dollar_volume": 50000000,
+   "as_of": "2026-10-05T00:00:00Z"
+  }
+ ]
+}

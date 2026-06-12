@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
+	"github.com/vingrad/dynamic-decision-engine/internal/strategy"
 )
 
 // WalkForwardResult compares raw against calibrated confidence on held-out
@@ -59,6 +61,99 @@ func WalkForward(ctx context.Context, reg *pack.Registry, pol policy.Policy, sce
 	res.BrierRaw /= float64(len(eval))
 	res.BrierCalibrated /= float64(len(eval))
 	return res, nil
+}
+
+// WalkForwardStrategiesResult compares unweighted against outcome-weighted
+// strategy selection on held-out decisions, the strategy analogue of
+// WalkForwardResult: the weights are fit on the first trainN decisions and
+// the remaining competitions are re-weighed offline.
+type WalkForwardStrategiesResult struct {
+	TrainDecisions  int                `json:"train_decisions"`
+	EvalDecisions   int                `json:"eval_decisions"`
+	BrierUnweighted float64            `json:"brier_unweighted"`
+	BrierWeighted   float64            `json:"brier_weighted"`
+	Weights         map[string]float64 `json:"weights"`
+}
+
+// WalkForwardStrategies replays the scenarios with the strategy selector on,
+// fits per-strategy weights on the first trainN decisions, and re-weighs the
+// remaining decisions' RECORDED competitions with and without the table — the
+// engine is not re-run, which evaluates exactly the mapping `dde strategy-fit`
+// would install via policy. Both arms score the chosen candidate's recorded
+// top confidence against the realized label, so the comparison isolates the
+// weight table. Decisions that recorded no competition are skipped.
+func WalkForwardStrategies(ctx context.Context, reg *pack.Registry, pol policy.Policy, scenarios []Scenario, trainN int) (WalkForwardStrategiesResult, error) {
+	on := true
+	cells, err := RunStrategyMatrix(ctx, reg, overrideStrategy(pol, policy.StrategySelection{Enabled: &on}), scenarios)
+	if err != nil {
+		return WalkForwardStrategiesResult{}, err
+	}
+	var decisions []Decision
+	for _, c := range cells {
+		if c.Config != "selector" {
+			continue
+		}
+		for _, d := range c.Report.Decisions {
+			if len(d.Candidates) > 0 {
+				decisions = append(decisions, d)
+			}
+		}
+	}
+	if trainN <= 0 || trainN >= len(decisions) {
+		return WalkForwardStrategiesResult{}, fmt.Errorf("backtest: trainN must split %d decisions, got %d", len(decisions), trainN)
+	}
+
+	train, eval := decisions[:trainN], decisions[trainN:]
+	samples := make([]finance.StrategySample, 0, len(train))
+	for _, d := range train {
+		samples = append(samples, finance.StrategySample{
+			Strategy: d.SelectedStrategy,
+			Regime:   finance.Regime(d.Regime),
+			Success:  d.Label == 1,
+		})
+	}
+	weights := finance.FitStrategyWeights(samples)
+
+	// Both arms run the SAME offline selection rule (utility argmax over the
+	// recorded competition, recorded winner as the all-filtered fallback) and
+	// differ only in the weight table — so the comparison isolates the table,
+	// not the absence of hysteresis or degraded-mode handling.
+	res := WalkForwardStrategiesResult{TrainDecisions: len(train), EvalDecisions: len(eval), Weights: weights}
+	pick := func(d Decision, w map[string]float64) int {
+		if i := strategy.ReWeigh(d.Candidates, w, d.Regime); i >= 0 {
+			return i
+		}
+		return recordedWinner(d)
+	}
+	for _, d := range eval {
+		unweighted := candidateConfidence(d.Candidates, pick(d, nil)) - d.Label
+		reweighed := candidateConfidence(d.Candidates, pick(d, weights)) - d.Label
+		res.BrierUnweighted += unweighted * unweighted
+		res.BrierWeighted += reweighed * reweighed
+	}
+	res.BrierUnweighted /= float64(len(eval))
+	res.BrierWeighted /= float64(len(eval))
+	return res, nil
+}
+
+// recordedWinner finds the recorded competition entry of the strategy that
+// actually won the decision; -1 when it cannot be resolved.
+func recordedWinner(d Decision) int {
+	for i, c := range d.Candidates {
+		if c.StrategyID == d.SelectedStrategy {
+			return i
+		}
+	}
+	return -1
+}
+
+// candidateConfidence reads a recorded candidate's top confidence; an
+// unresolvable index scores as a coin flip rather than skewing either arm.
+func candidateConfidence(cands []domain.StrategyCandidate, i int) float64 {
+	if i < 0 || i >= len(cands) {
+		return 0.5
+	}
+	return cands[i].TopConfidence
 }
 
 // rawConfidence is a decision's pre-calibration confidence, falling back to the

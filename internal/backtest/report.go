@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"time"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/domain"
 )
 
 // Decision records one step of the replay.
@@ -27,6 +29,14 @@ type Decision struct {
 	// 1 when the top thesis's forward return was positive (falling back to the
 	// analyst kill label), else 0. Evaluation-only.
 	Label float64 `json:"label"`
+	// SelectedStrategy is the strategy lens that won this decision's candidate
+	// plan (Provenance.SelectedStrategy); empty when no selector is in play.
+	SelectedStrategy string `json:"selected_strategy,omitempty"`
+	// Regime is the market-regime label recorded at decision time.
+	Regime string `json:"regime,omitempty"`
+	// Candidates is the recorded strategy competition (evaluation-only): the
+	// walk-forward re-weighs these after the fact without re-running the engine.
+	Candidates []domain.StrategyCandidate `json:"candidates,omitempty"`
 }
 
 // Report summarises a backtest run. The metrics describe decision/replanning
@@ -46,6 +56,12 @@ type Report struct {
 	// material replan (1 == never reacted to noise).
 	NoiseRobustness float64 `json:"noise_robustness"`
 	HypotheticalPnL float64 `json:"hypothetical_pnl"`
+	// StrategyShare counts decisions per winning strategy (selector runs only),
+	// making winner flapping visible at a glance.
+	StrategyShare map[string]int `json:"strategy_share,omitempty"`
+	// StrategyFlips counts decisions whose winning strategy differed from the
+	// previous decision's — the flapping metric the backtest gates bound.
+	StrategyFlips int `json:"strategy_flips,omitempty"`
 }
 
 // Render writes a human-readable report to w.
