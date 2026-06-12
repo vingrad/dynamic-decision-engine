@@ -61,6 +61,10 @@ func NewOfflineProvider(opts ...OfflineOption) (*OfflineProvider, error) {
 	}
 	for k := range p.funds {
 		sort.Slice(p.funds[k], func(i, j int) bool { return p.funds[k][i].AsOf.Before(p.funds[k][j].AsOf) })
+		// Fixture series are dated snapshots, so they honor the as-of contract.
+		for i := range p.funds[k] {
+			p.funds[k][i].Freshness = FreshnessPointInTime
+		}
 	}
 	for k := range p.bars {
 		sort.Slice(p.bars[k], func(i, j int) bool { return p.bars[k][i].Date.Before(p.bars[k][j].Date) })

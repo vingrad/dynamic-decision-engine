@@ -34,7 +34,18 @@ type Fundamentals struct {
 	MarketCap float64   `json:"market_cap"`
 	EPS       float64   `json:"eps"`
 	AsOf      time.Time `json:"as_of"`
+	// Freshness records whether the values honor the as-of contract
+	// (FreshnessPointInTime) or are a latest-only snapshot from a vendor without
+	// historical fundamentals (FreshnessLatestOnly). Latest-only values must not
+	// feed backtests — they would leak future knowledge into past decisions.
+	Freshness string `json:"freshness,omitempty"`
 }
+
+// Freshness values for Fundamentals.
+const (
+	FreshnessPointInTime = "point_in_time" // honest as-of data (offline fixtures, paid vendors)
+	FreshnessLatestOnly  = "latest_only"   // free-tier vendors: current snapshot, not as-of
+)
 
 // Bar is a single OHLCV daily bar.
 type Bar struct {
@@ -60,5 +71,17 @@ type Provider interface {
 // ErrNotFound indicates the symbol (or no data at/before asOf) was found.
 var ErrNotFound = errors.New("marketdata: symbol or as-of data not found")
 
-// ErrNotImplemented is returned by the HTTP provider stub.
+// ErrNotImplemented is returned by placeholder vendors that are registered but
+// not yet integrated (e.g. alphavantage, tiingo).
 var ErrNotImplemented = errors.New("marketdata: provider not implemented")
+
+// ErrNotSupported indicates a permanent capability gap: the vendor can never
+// serve this request (e.g. Stooq has no fundamentals, and latest-only vendors
+// refuse past-asOf fundamentals rather than fake them). A chain falls through
+// to the next vendor.
+var ErrNotSupported = errors.New("marketdata: not supported by vendor")
+
+// ErrUnavailable indicates a temporary vendor failure: rate limit (429), 5xx,
+// transport error, or an exhausted daily request budget. A chain falls through;
+// callers must not cache it.
+var ErrUnavailable = errors.New("marketdata: vendor temporarily unavailable")

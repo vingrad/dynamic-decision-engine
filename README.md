@@ -177,6 +177,18 @@ OpenAI-compatible endpoint — specific provider to be decided) is on the
 own hardware with no cloud dependency. (The OpenAI-compatible adapter already
 accepts a custom endpoint via `DDE_LLM_BASE_URL`.)
 
+The same BYOK posture applies to **market data** for the investing domain: the
+offline fixture provider is the default, and real vendors are one env switch
+away — `DDE_MARKETDATA_PROVIDER=http DDE_MARKETDATA_VENDOR=fmp,stooq` chains
+Financial Modeling Prep (quotes, fundamentals, EOD bars; `DDE_MARKETDATA_API_KEY`)
+with keyless Stooq (EOD bars, availability subject to its anti-bot protection) as
+fallback, behind a TTL cache and per-vendor rate limiting. A vendor outage never
+kills a decision — the chain falls through and the planner degrades. Free tiers
+are for dev/demo (typically non-commercial); bring your own paid key for
+production use. Backtests always run on offline fixtures so they
+stay reproducible and lookahead-free — see
+[`docs/domains.md`](docs/domains.md#market-data-point-in-time).
+
 **Multi-model planning** (`DDE_PLANNER=multi`) composes models by *role*, each
 recorded in provenance for auditability:
 
@@ -614,7 +626,7 @@ More LLM providers, local / self-hosted inference, authentication, richer scorin
 * [x] Webhook event notifications (best-effort, HMAC-signed, retried)
 * [x] MCP server (stdio via `dde mcp` + streamable HTTP at `/mcp`)
 * [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
-* [ ] Real market-data vendor (HTTP provider stub in place)
+* [x] Real market-data vendors (FMP + keyless Stooq, vendor chain with fallback, TTL cache, rate limiting; BYOK)
 * [ ] OpenTelemetry tracing
 * [ ] Authentication / authorization
 

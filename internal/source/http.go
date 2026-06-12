@@ -24,8 +24,8 @@ type HTTPConfig struct {
 // HTTPSource is a generic REST data source. It GETs Endpoint and expects a JSON body
 // shaped like a ContextDelta ({"facts":[...],"assets":[...],"constraints":[...]}).
 // Domain-specific transformation belongs in a purpose-built adapter; this one is the
-// canonical-shape baseline modelled on marketdata.HTTPProvider. Any transport,
-// status, or decode failure yields a stale Result so the decision still proceeds.
+// canonical-shape baseline. Any transport, status, or decode failure yields a stale
+// Result so the decision still proceeds.
 type HTTPSource struct {
 	name     string
 	domain   string

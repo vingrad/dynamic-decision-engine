@@ -14,6 +14,8 @@ import (
 	"time"
 
 	"gopkg.in/yaml.v3"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 )
 
 // Config holds all runtime settings.
@@ -59,10 +61,24 @@ type Config struct {
 	// domains beyond the built-ins (DDE_DOMAINS). Empty means built-ins only.
 	DomainsPath string `json:"domains_file" yaml:"domains_file"`
 	// MarketDataProvider selects the market-data backend for the finance planner:
-	// "offline" (default, embedded fixtures, no network) or "http" (stub).
+	// "offline" (default, embedded fixtures, no network) or "http" (real vendors).
 	MarketDataProvider string `json:"market_data_provider" yaml:"market_data_provider"`
-	// MarketDataVendor names the HTTP vendor when MarketDataProvider == "http".
+	// MarketDataVendor is a comma-separated vendor chain tried in order when
+	// MarketDataProvider == "http" (e.g. "fmp,stooq"). The API key is BYOK and
+	// env-only: DDE_MARKETDATA_API_KEY.
 	MarketDataVendor string `json:"market_data_vendor" yaml:"market_data_vendor"`
+	// MarketDataBaseURL overrides every chained vendor's endpoint (tests/proxies).
+	MarketDataBaseURL string `json:"market_data_base_url" yaml:"market_data_base_url"`
+	// MarketDataQuoteTTL is how long fetched quotes are served from cache.
+	// 0 disables quote caching.
+	MarketDataQuoteTTL time.Duration `json:"market_data_quote_ttl" yaml:"market_data_quote_ttl"`
+	// MarketDataFundamentalsTTL is how long fetched fundamentals are served from
+	// cache. 0 disables fundamentals caching.
+	MarketDataFundamentalsTTL time.Duration `json:"market_data_fundamentals_ttl" yaml:"market_data_fundamentals_ttl"`
+	// MarketDataBarsTTL is how long recent bar ranges (touching yesterday or
+	// today) are served from cache; older ranges are immutable history cached
+	// without expiry. 0 disables bars caching.
+	MarketDataBarsTTL time.Duration `json:"market_data_bars_ttl" yaml:"market_data_bars_ttl"`
 	// FinanceHybrid enables LLM thesis narration on top of numeric scoring.
 	FinanceHybrid bool `json:"finance_hybrid" yaml:"finance_hybrid"`
 	// PlanCacheSize bounds the in-memory plan cache (entries). 0 disables caching.
@@ -127,32 +143,36 @@ func Default() Config {
 		// LLMModel is empty by default so each planner applies its own
 		// provider-appropriate default (Anthropic→claude-opus-4-8,
 		// OpenAI→gpt-4o, DeepSeek→deepseek-chat). Override with DDE_LLM_MODEL.
-		LLMModel:                 "",
-		LLMMaxTokens:             4096,
-		MultiMode:                "verify",
-		MultiProviders:           nil,
-		MultiConfidenceThreshold: 0.6,
-		MultiEscalateOnSignal:    true,
-		RequestTimeout:           15 * time.Second,
-		CORSAllowedOrigins:       []string{"http://localhost:3000"},
-		PolicyFile:               "",
-		MarketDataProvider:       "offline",
-		MarketDataVendor:         "alphavantage",
-		FinanceHybrid:            false,
-		PlanCacheSize:            1024,
-		PlanCacheTTL:             60 * time.Second,
-		ReplanAsync:              false,
-		ReplanWorkers:            4,
-		ReplanTimeout:            60 * time.Second,
-		ReplanMaxRetries:         2,
-		SourcesEnabled:           false,
-		SourceTimeout:            5 * time.Second,
-		SourcesConfigPath:        "",
-		WebhookURL:               "",
-		WebhookSecret:            "",
-		WebhookTimeout:           5 * time.Second,
-		WebhookRetries:           3,
-		WebhookEvents:            nil,
+		LLMModel:                  "",
+		LLMMaxTokens:              4096,
+		MultiMode:                 "verify",
+		MultiProviders:            nil,
+		MultiConfidenceThreshold:  0.6,
+		MultiEscalateOnSignal:     true,
+		RequestTimeout:            15 * time.Second,
+		CORSAllowedOrigins:        []string{"http://localhost:3000"},
+		PolicyFile:                "",
+		MarketDataProvider:        "offline",
+		MarketDataVendor:          "fmp,stooq",
+		MarketDataBaseURL:         "",
+		MarketDataQuoteTTL:        15 * time.Minute,
+		MarketDataFundamentalsTTL: 24 * time.Hour,
+		MarketDataBarsTTL:         15 * time.Minute,
+		FinanceHybrid:             false,
+		PlanCacheSize:             1024,
+		PlanCacheTTL:              60 * time.Second,
+		ReplanAsync:               false,
+		ReplanWorkers:             4,
+		ReplanTimeout:             60 * time.Second,
+		ReplanMaxRetries:          2,
+		SourcesEnabled:            false,
+		SourceTimeout:             5 * time.Second,
+		SourcesConfigPath:         "",
+		WebhookURL:                "",
+		WebhookSecret:             "",
+		WebhookTimeout:            5 * time.Second,
+		WebhookRetries:            3,
+		WebhookEvents:             nil,
 	}
 }
 
@@ -265,6 +285,24 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("DDE_MARKETDATA_VENDOR"); v != "" {
 		cfg.MarketDataVendor = v
 	}
+	if v := os.Getenv("DDE_MARKETDATA_BASE_URL"); v != "" {
+		cfg.MarketDataBaseURL = v
+	}
+	if v := os.Getenv("DDE_MARKETDATA_QUOTE_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MarketDataQuoteTTL = d
+		}
+	}
+	if v := os.Getenv("DDE_MARKETDATA_FUNDAMENTALS_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MarketDataFundamentalsTTL = d
+		}
+	}
+	if v := os.Getenv("DDE_MARKETDATA_BARS_TTL"); v != "" {
+		if d, err := time.ParseDuration(v); err == nil {
+			cfg.MarketDataBarsTTL = d
+		}
+	}
 	if v := os.Getenv("DDE_FINANCE_HYBRID"); v != "" {
 		cfg.FinanceHybrid = v == "1" || strings.EqualFold(v, "true")
 	}
@@ -358,9 +396,22 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: invalid planner %q", c.Planner)
 	}
 	switch c.MarketDataProvider {
-	case "offline", "http":
+	case "offline":
+	case "http":
+		vendors := c.MarketDataVendors()
+		if len(vendors) == 0 {
+			return fmt.Errorf("config: market_data_provider=http needs at least one vendor (DDE_MARKETDATA_VENDOR)")
+		}
+		for _, v := range vendors {
+			if !slices.Contains(marketdata.KnownVendors(), v) {
+				return fmt.Errorf("config: unknown market_data_vendor %q (known: %s)", v, strings.Join(marketdata.KnownVendors(), ", "))
+			}
+		}
 	default:
 		return fmt.Errorf("config: invalid market_data_provider %q", c.MarketDataProvider)
+	}
+	if c.MarketDataQuoteTTL < 0 || c.MarketDataFundamentalsTTL < 0 || c.MarketDataBarsTTL < 0 {
+		return fmt.Errorf("config: market data cache TTLs must not be negative")
 	}
 	if c.RequestTimeout <= 0 {
 		return fmt.Errorf("config: request_timeout must be positive")
@@ -388,6 +439,11 @@ func (c Config) Validate() error {
 		}
 	}
 	return nil
+}
+
+// MarketDataVendors returns the configured vendor chain in order.
+func (c Config) MarketDataVendors() []string {
+	return splitAndTrim(c.MarketDataVendor)
 }
 
 func splitAndTrim(s string) []string {
