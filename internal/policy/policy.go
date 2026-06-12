@@ -29,6 +29,29 @@ type PlannerSpec struct {
 	Model          string   `json:"model,omitempty" yaml:"model"`                     // overrides the global LLM model id
 }
 
+// StrategySelection tunes a domain's multi-strategy selector. All fields are
+// optional; an absent block leaves the pack default (selection disabled until
+// the domain's backtest gates flip it on).
+type StrategySelection struct {
+	// Enabled turns the strategy competition on or off for the domain. Nil
+	// leaves the wiring default (off).
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Disable drops named strategies from the competition (e.g. to retire a
+	// lens without editing the pack). Unknown IDs are ignored with a warning at
+	// wire time so a policy file survives pack evolution.
+	Disable []string `json:"disable,omitempty" yaml:"disable,omitempty"`
+	// Weights are outcome-fit utility multipliers keyed by strategy ID, with an
+	// optional regime-specific "id@regime" entry that wins over the plain key.
+	// Fit offline by `dde strategy-fit`; absent keys mean 1.0.
+	Weights map[string]float64 `json:"weights,omitempty" yaml:"weights,omitempty"`
+	// IncumbentMargin overrides the selection hysteresis (how much a challenger
+	// must beat the incumbent strategy by). Nil leaves the default.
+	IncumbentMargin *float64 `json:"incumbent_margin,omitempty" yaml:"incumbent_margin,omitempty"`
+	// Params overrides a named strategy's numeric tuning (prior tilts, weights,
+	// risk scale), keyed by strategy ID.
+	Params map[string]*finance.StrategyParams `json:"params,omitempty" yaml:"params,omitempty"`
+}
+
 // DomainPolicy overrides a single domain's tunables. Pointer/optional fields mean
 // "leave the pack default" when absent.
 type DomainPolicy struct {
@@ -48,6 +71,8 @@ type DomainPolicy struct {
 	// observed outcome frequencies. Fit offline by `dde calibrate`; an empty curve
 	// is the identity.
 	Calibration *finance.CalibrationCurve `json:"calibration,omitempty" yaml:"calibration,omitempty"`
+	// Strategy, when non-nil, tunes the domain's multi-strategy selector.
+	Strategy *StrategySelection `json:"strategy,omitempty" yaml:"strategy,omitempty"`
 }
 
 // Policy is the full set of per-domain overrides, keyed by domain id.
@@ -101,12 +126,47 @@ var singleBackends = map[string]bool{
 // silently degrading (a verify spec whose verifier can't verify).
 func (p Policy) Validate() error {
 	for id, dp := range p.Domains {
-		if dp.Planner == nil {
-			continue
+		if dp.Planner != nil {
+			if err := dp.Planner.validate(); err != nil {
+				return fmt.Errorf("domain %q planner: %w", id, err)
+			}
 		}
-		if err := dp.Planner.validate(); err != nil {
-			return fmt.Errorf("domain %q planner: %w", id, err)
+		if dp.Strategy != nil {
+			if err := dp.Strategy.validate(); err != nil {
+				return fmt.Errorf("domain %q strategy: %w", id, err)
+			}
 		}
+	}
+	return nil
+}
+
+// validate rejects strategy-selection overrides that would corrupt selection
+// rather than tune it: a non-positive weight inverts or zeroes utilities, and
+// empty keys can never match a strategy.
+func (s StrategySelection) validate() error {
+	for key, w := range s.Weights {
+		if strings.TrimSpace(key) == "" {
+			return fmt.Errorf("weights: empty strategy key")
+		}
+		if w <= 0 {
+			return fmt.Errorf("weights[%q]: must be > 0, got %v", key, w)
+		}
+	}
+	for _, id := range s.Disable {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("disable: empty strategy id")
+		}
+	}
+	for id, params := range s.Params {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("params: empty strategy id")
+		}
+		if params == nil {
+			return fmt.Errorf("params[%q]: null override", id)
+		}
+	}
+	if s.IncumbentMargin != nil && *s.IncumbentMargin < 0 {
+		return fmt.Errorf("incumbent_margin: must be >= 0, got %v", *s.IncumbentMargin)
 	}
 	return nil
 }

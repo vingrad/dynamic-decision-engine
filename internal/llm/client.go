@@ -35,6 +35,13 @@ type PlanRequest struct {
 	// it to preserve a move's stable Key when the move is semantically unchanged, so
 	// rewording a title does not read as a new plan. Nil for an initial plan.
 	CurrentMoves []domain.RankedMove
+
+	// CurrentStrategy is the domain strategy that won the current plan version
+	// (Provenance.SelectedStrategy), the incumbent for the selector's hysteresis.
+	// Only the SelectorPlanner reads it; strategy children never see it, and it is
+	// deliberately excluded from plan-cache keys (the selector itself is never
+	// cached). Empty for an initial plan or when no selector is in play.
+	CurrentStrategy string
 }
 
 // PlanResult is a planner's output. The engine wraps this into an immutable

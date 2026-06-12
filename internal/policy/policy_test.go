@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 )
 
 func TestLoadEmptyPath(t *testing.T) {
@@ -110,5 +112,33 @@ func TestLoadRejectsBadPlanner(t *testing.T) {
 	}
 	if _, err := Load(path); err == nil {
 		t.Error("Load should fail on an invalid planner spec")
+	}
+}
+
+func TestStrategySelectionValidate(t *testing.T) {
+	on := true
+	neg := -0.1
+	cases := []struct {
+		name string
+		sel  StrategySelection
+		ok   bool
+	}{
+		{"empty block", StrategySelection{}, true},
+		{"enabled with weights", StrategySelection{Enabled: &on, Weights: map[string]float64{"momentum": 1.2, "value@trend": 0.8}}, true},
+		{"zero weight", StrategySelection{Weights: map[string]float64{"momentum": 0}}, false},
+		{"negative weight", StrategySelection{Weights: map[string]float64{"momentum": -1}}, false},
+		{"empty weight key", StrategySelection{Weights: map[string]float64{" ": 1}}, false},
+		{"empty disable id", StrategySelection{Disable: []string{""}}, false},
+		{"null params", StrategySelection{Params: map[string]*finance.StrategyParams{"value": nil}}, false},
+		{"negative margin", StrategySelection{IncumbentMargin: &neg}, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := Policy{Domains: map[string]DomainPolicy{"investing": {Strategy: &tc.sel}}}
+			err := p.Validate()
+			if (err == nil) != tc.ok {
+				t.Errorf("Validate() error = %v, want ok=%v", err, tc.ok)
+			}
+		})
 	}
 }

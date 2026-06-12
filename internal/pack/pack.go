@@ -97,10 +97,35 @@ type Descriptor struct {
 	Scoring any        `json:"-" yaml:"-"`
 	Vocab   Vocabulary `json:"vocab" yaml:"vocab"`
 
+	// Strategies declares the named strategy variants that compete for this
+	// domain. The wiring layer builds one child planner per strategy (via the
+	// domain's PlannerKind) and composes them under a selector. Empty — every
+	// pre-existing pack — means exactly the single-planner behaviour. The slice
+	// order is canonical: it is the selection's last-resort tie-break.
+	Strategies []StrategyDescriptor `json:"strategies,omitempty" yaml:"strategies,omitempty"`
+
 	// Validation is the declarative validation policy for the domain: a set of
 	// shape rules plus an optional vocabulary check. It is pure data so a domain
 	// (including one loaded from config) needs no code. Evaluate it via Validate.
 	Validation Validation `json:"validation" yaml:"validation"`
+}
+
+// StrategyDescriptor names one competing strategy variant for a domain. Like
+// the Descriptor it is pure data: what the strategy means numerically rides on
+// the opaque Scoring field (e.g. *finance.StrategyParams) and is interpreted
+// by the wiring layer's planner builder.
+type StrategyDescriptor struct {
+	ID   string `json:"id" yaml:"id"`
+	Name string `json:"name" yaml:"name"`
+	// Regimes lists the market regimes this strategy declares itself applicable
+	// to (e.g. "trend", "high_vol"). Empty means all regimes — at least one
+	// strategy per domain should leave this empty so regime gating can never
+	// empty the candidate set.
+	Regimes []string `json:"regimes,omitempty" yaml:"regimes,omitempty"`
+	// Scoring is the opaque per-strategy tuning consumed by the domain's planner
+	// builder. Like Descriptor.Scoring it is not config-loadable; tune via the
+	// policy file instead.
+	Scoring any `json:"-" yaml:"-"`
 }
 
 // KindScope names where a kind-based rule looks for a kind.

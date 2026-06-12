@@ -26,9 +26,34 @@ stated horizon. Do not inflate it; uncertainty is normal and expected.
 You MUST include verbatim in the plan summary: "Educational decision-support only.
 Not financial advice. Not a recommendation to buy or sell any security."`
 
+// investingStrategies maps finance.DefaultStrategySet onto pack descriptors,
+// attaching each lens's regime applicability: value works in trends and
+// ranges, momentum needs a trend, and defensive declares no regimes so the
+// candidate set can never be emptied by gating.
+func investingStrategies() []StrategyDescriptor {
+	regimes := map[string][]string{
+		"value":    {"trend", "range"},
+		"momentum": {"trend"},
+		// defensive: applicable everywhere
+	}
+	set := finance.DefaultStrategySet()
+	out := make([]StrategyDescriptor, len(set))
+	for i := range set {
+		params := set[i]
+		out[i] = StrategyDescriptor{
+			ID:      params.Name,
+			Name:    params.Name,
+			Regimes: regimes[params.Name],
+			Scoring: &params,
+		}
+	}
+	return out
+}
+
 // investingPack adds thesis-oriented prompting, a tighter materiality threshold
-// (calibration matters more for investing), and default scoring tunables consumed
-// by the optional numeric finance planner.
+// (calibration matters more for investing), default scoring tunables consumed
+// by the optional numeric finance planner, and the named strategy lenses that
+// compete under the selector (opt-in via policy until backtest gates pass).
 func investingPack() Descriptor {
 	scoring := finance.DefaultScoringConfig()
 	return Descriptor{
@@ -40,6 +65,7 @@ func investingPack() Descriptor {
 		PlannerKind:    "finance",
 		Eval:           EvaluatorConfig{ConfidenceDelta: 0.05},
 		Scoring:        &scoring,
+		Strategies:     investingStrategies(),
 		Vocab: Vocabulary{
 			AssetKinds:      []string{"capital", "edge", "information", "conviction", "liquidity", "time_horizon"},
 			ConstraintKinds: []string{"risk_tolerance", "liquidity", "time_horizon", "drawdown_limit", "mandate", "tax"},
