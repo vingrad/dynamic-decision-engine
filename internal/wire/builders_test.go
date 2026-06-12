@@ -89,8 +89,13 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 		},
 	}
 
-	// Default: selection off, single planner, unchanged provenance.
-	router := BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, deps)
+	// Policy off-switch: explicit enabled:false restores the single planner,
+	// byte-for-byte the legacy provenance.
+	off := false
+	polOff := policy.Policy{Domains: map[string]policy.DomainPolicy{
+		"investing": {Strategy: &policy.StrategySelection{Enabled: &off}},
+	}}
+	router := BuildPlannerRouter(pack.NewRegistry(), polOff, deps)
 	res, err := router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
 	if err != nil {
 		t.Fatal(err)
@@ -99,12 +104,10 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 		t.Errorf("with selection off the single finance planner must serve: %+v", res.Provenance)
 	}
 
-	// Enabled via policy: the selector serves, candidates are recorded.
+	// Default (no policy): the pack declares strategies, so the selector serves
+	// and candidates are recorded.
 	on := true
-	pol := policy.Policy{Domains: map[string]policy.DomainPolicy{
-		"investing": {Strategy: &policy.StrategySelection{Enabled: &on}},
-	}}
-	router = BuildPlannerRouter(pack.NewRegistry(), pol, deps)
+	router = BuildPlannerRouter(pack.NewRegistry(), policy.Policy{}, deps)
 	res, err = router.GeneratePlan(context.Background(), llm.PlanRequest{Goal: goal})
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +126,7 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 	}
 
 	// Disabling a strategy removes it from the field.
+	pol := policy.Policy{Domains: map[string]policy.DomainPolicy{}}
 	pol.Domains["investing"] = policy.DomainPolicy{Strategy: &policy.StrategySelection{
 		Enabled: &on, Disable: []string{"momentum"},
 	}}

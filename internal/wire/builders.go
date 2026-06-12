@@ -77,13 +77,14 @@ func buildFinancePlanner(d pack.Descriptor, pol policy.Policy, deps PlannerDeps)
 }
 
 // selectionEnabled reports whether the strategy competition is on for a domain.
-// An explicit policy setting wins; the wiring default is off until the domain's
-// backtest gates justify flipping it.
+// An explicit policy setting wins; otherwise a domain that declares strategies
+// competes them by default — the investing pack's backtest gates
+// (TestStrategyMatrixGates) earned the flip, and policy remains the off switch.
 func selectionEnabled(d pack.Descriptor, pol policy.Policy) bool {
 	if dp, ok := pol.For(d.ID); ok && dp.Strategy != nil && dp.Strategy.Enabled != nil {
 		return *dp.Strategy.Enabled
 	}
-	return false
+	return len(d.Strategies) > 0
 }
 
 // activeStrategies returns the descriptor's strategies minus any the policy
