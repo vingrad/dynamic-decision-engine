@@ -172,12 +172,17 @@ func (p *SelectorPlanner) GeneratePlan(ctx context.Context, req PlanRequest) (Pl
 
 	// Disagreement among admissible strategies is honest uncertainty about the
 	// decision, quantized to material steps so it can never churn plans on
-	// sub-threshold noise.
+	// sub-threshold noise. The moves are COPIED before the haircut: the winner
+	// may be a cache hit whose slice shares its backing array with the child's
+	// plan-cache entry, and an in-place write would corrupt the cached result
+	// (compounding the penalty on every subsequent hit).
 	penalty := strategy.DisagreementPenalty(sel.Scored, sel.Scored[sel.Winner].TopMoveKey)
 	if penalty > 0 {
-		for i := range winner.RankedMoves {
-			winner.RankedMoves[i].Confidence = clampConfidence(winner.RankedMoves[i].Confidence - penalty)
+		moves := append([]domain.RankedMove(nil), winner.RankedMoves...)
+		for i := range moves {
+			moves[i].Confidence = clampConfidence(moves[i].Confidence - penalty)
 		}
+		winner.RankedMoves = moves
 	}
 
 	contributors := p.buildContributors(eligible, results, errs, sel.Winner)

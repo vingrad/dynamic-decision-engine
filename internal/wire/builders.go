@@ -196,20 +196,22 @@ func financeRegimeFn(provider marketdata.Provider, now func() time.Time) llm.Reg
 	}
 }
 
-// strategyParams resolves one strategy's numeric tuning: a policy override
-// wins, else the descriptor's opaque Scoring (when it holds
-// *finance.StrategyParams), else a zero params that leaves the base config
-// untouched.
+// strategyParams resolves one strategy's numeric tuning: the descriptor's
+// opaque Scoring (when it holds *finance.StrategyParams) is the base, and a
+// policy override MERGES onto it field-by-field — a policy that tunes one
+// knob keeps the lens's other parameters (its prior tilts in particular)
+// instead of silently resetting them.
 func strategyParams(s pack.StrategyDescriptor, dp policy.DomainPolicy, hasPolicy bool) finance.StrategyParams {
+	params := finance.StrategyParams{Name: s.ID}
+	if p, ok := s.Scoring.(*finance.StrategyParams); ok && p != nil {
+		params = *p
+	}
 	if hasPolicy && dp.Strategy != nil {
 		if p, ok := dp.Strategy.Params[s.ID]; ok && p != nil {
-			return *p
+			params = params.Merge(*p)
 		}
 	}
-	if p, ok := s.Scoring.(*finance.StrategyParams); ok && p != nil {
-		return *p
-	}
-	return finance.StrategyParams{Name: s.ID}
+	return params
 }
 
 // marketDataKey is the DataSources registry key for the market-data provider.

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/domain"
+	"github.com/vingrad/dynamic-decision-engine/internal/finance"
 	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/marketdata"
 	"github.com/vingrad/dynamic-decision-engine/internal/pack"
@@ -137,5 +138,43 @@ func TestFinanceSelectorBuildsWhenEnabled(t *testing.T) {
 	}
 	if len(res.Provenance.StrategyCandidates) != 2 {
 		t.Errorf("disabling momentum should leave 2 candidates, got %d", len(res.Provenance.StrategyCandidates))
+	}
+}
+
+// TestPolicyStrategyParamsMergeKeepsPrior: a policy that tunes one knob of a
+// lens must not strip the lens's prior tilts — the regression here was a
+// wholesale replacement whose zero Prior normalized to the neutral blend.
+func TestPolicyStrategyParamsMergeKeepsPrior(t *testing.T) {
+	reg := pack.NewRegistry()
+	d, _ := reg.Get("investing")
+	pol := policy.Policy{Domains: map[string]policy.DomainPolicy{
+		"investing": {Strategy: &policy.StrategySelection{
+			Params: map[string]*finance.StrategyParams{
+				"momentum": {RiskScale: finance.RiskScale{Kelly: 0.8}},
+			},
+		}},
+	}}
+	dp, ok := pol.For("investing")
+	if !ok {
+		t.Fatal("policy lookup failed")
+	}
+
+	var momentum pack.StrategyDescriptor
+	for _, s := range d.Strategies {
+		if s.ID == "momentum" {
+			momentum = s
+		}
+	}
+	declared := momentum.Scoring.(*finance.StrategyParams)
+
+	got := strategyParams(momentum, dp, true)
+	if got.Prior != declared.Prior {
+		t.Errorf("partial policy override stripped the prior: got %+v, want %+v", got.Prior, declared.Prior)
+	}
+	if got.RewardRiskRatio != declared.RewardRiskRatio {
+		t.Errorf("reward:risk lost: got %v, want %v", got.RewardRiskRatio, declared.RewardRiskRatio)
+	}
+	if got.RiskScale.Kelly != 0.8 {
+		t.Errorf("the overridden knob must apply, got %v", got.RiskScale.Kelly)
 	}
 }

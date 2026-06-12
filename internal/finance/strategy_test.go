@@ -158,3 +158,49 @@ func TestDefaultStrategySet(t *testing.T) {
 		}
 	}
 }
+
+func TestStrategyParamsMerge(t *testing.T) {
+	base := DefaultStrategySet()[1] // momentum: Prior{0.3,0.7,1.8}, RRR 1.8
+
+	t.Run("partial override keeps the lens identity", func(t *testing.T) {
+		got := base.Merge(StrategyParams{RiskScale: RiskScale{Kelly: 0.8}})
+		if got.Prior != base.Prior {
+			t.Errorf("an override that only scales Kelly must keep the prior tilts: %+v", got.Prior)
+		}
+		if got.Weights != base.Weights || got.RewardRiskRatio != base.RewardRiskRatio {
+			t.Errorf("weights/ratio must survive a partial override: %+v", got)
+		}
+		if got.RiskScale.Kelly != 0.8 {
+			t.Errorf("the set field must apply, got %v", got.RiskScale.Kelly)
+		}
+	})
+
+	t.Run("set fields win, name never changes", func(t *testing.T) {
+		got := base.Merge(StrategyParams{
+			Name:            "renamed",
+			Prior:           PriorWeights{Valuation: 2, Quality: 1, Momentum: 1},
+			RewardRiskRatio: 2.2,
+		})
+		if got.Name != base.Name {
+			t.Errorf("name is identity and must not be overridable, got %q", got.Name)
+		}
+		if got.Prior != (PriorWeights{Valuation: 2, Quality: 1, Momentum: 1}) || got.RewardRiskRatio != 2.2 {
+			t.Errorf("set fields must override: %+v", got)
+		}
+	})
+
+	t.Run("zero override is identity", func(t *testing.T) {
+		if got := base.Merge(StrategyParams{}); got != base {
+			t.Errorf("Merge(zero) = %+v, want base unchanged", got)
+		}
+	})
+
+	t.Run("risk scale merges per field", func(t *testing.T) {
+		withScale := base
+		withScale.RiskScale = RiskScale{Kelly: 0.5, PerTradeRisk: 0.75, Aggregate: 0.75}
+		got := withScale.Merge(StrategyParams{RiskScale: RiskScale{Aggregate: 0.9}})
+		if got.RiskScale != (RiskScale{Kelly: 0.5, PerTradeRisk: 0.75, Aggregate: 0.9}) {
+			t.Errorf("risk scale must merge field-by-field: %+v", got.RiskScale)
+		}
+	})
+}

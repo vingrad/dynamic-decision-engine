@@ -342,3 +342,43 @@ func TestSelectorDeterministicAcrossRuns(t *testing.T) {
 		}
 	}
 }
+
+// TestSelectorPenaltyDoesNotCorruptChildCache: the disagreement haircut must
+// never write into a cached child result. With cached children and a split
+// competition, repeated identical requests must ship the SAME confidence —
+// an in-place penalty would compound through the shared backing array on
+// every cache hit.
+func TestSelectorPenaltyDoesNotCorruptChildCache(t *testing.T) {
+	a := &fakePlanner{name: "finance:value", moves: []domain.RankedMove{
+		strategyMove("thesis:ACME", 0.8, domain.LevelHigh, domain.LevelLow, domain.LevelMedium),
+	}}
+	b := &fakePlanner{name: "finance:momentum", moves: []domain.RankedMove{
+		strategyMove("thesis:GLOBEX", 0.4, domain.LevelMedium, domain.LevelLow, domain.LevelMedium),
+	}}
+	cache := NewMemoryCache(16)
+	p, err := NewSelectorPlanner(SelectorConfig{Children: []StrategyChild{
+		{ID: "value", Planner: NewCachingPlanner(a, cache, nil)},
+		{ID: "momentum", Planner: NewCachingPlanner(b, cache, nil)},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := PlanRequest{Goal: selectorGoal()}
+	for i := 0; i < 3; i++ {
+		res, err := p.GeneratePlan(context.Background(), req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		// Split top keys → penalty 0.05 → 0.75, on EVERY request identically.
+		if got := res.RankedMoves[0].Confidence; got != 0.75 {
+			t.Fatalf("request %d: confidence = %v, want 0.75 (penalty must not compound through the cache)", i+1, got)
+		}
+	}
+	// The cached child entry itself must be untouched.
+	if cached, ok := cache.Get(cacheKey("finance:value", req)); !ok {
+		t.Fatal("expected a cached child entry")
+	} else if got := cached.RankedMoves[0].Confidence; got != 0.8 {
+		t.Errorf("cached child confidence = %v, want pristine 0.8", got)
+	}
+}

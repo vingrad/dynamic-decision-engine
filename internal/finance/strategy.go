@@ -59,6 +59,34 @@ func (s StrategyParams) Apply(base ScoringConfig) ScoringConfig {
 	return out
 }
 
+// Merge overlays the SET fields of an override onto the receiver, leaving
+// zero-valued fields of the override alone — the same partial-override
+// semantics every policy knob follows. A policy tuning one knob of a lens
+// (e.g. its Kelly scale) must not silently strip the lens's other parameters:
+// without this, an unset Prior would normalize to the neutral blend and erase
+// the lens's identity. Name is identity, never overridable.
+func (s StrategyParams) Merge(o StrategyParams) StrategyParams {
+	if o.Prior != (PriorWeights{}) {
+		s.Prior = o.Prior
+	}
+	if o.Weights != (ScoreWeights{}) {
+		s.Weights = o.Weights
+	}
+	if o.RewardRiskRatio > 0 {
+		s.RewardRiskRatio = o.RewardRiskRatio
+	}
+	if o.RiskScale.Kelly > 0 {
+		s.RiskScale.Kelly = o.RiskScale.Kelly
+	}
+	if o.RiskScale.PerTradeRisk > 0 {
+		s.RiskScale.PerTradeRisk = o.RiskScale.PerTradeRisk
+	}
+	if o.RiskScale.Aggregate > 0 {
+		s.RiskScale.Aggregate = o.RiskScale.Aggregate
+	}
+	return s
+}
+
 // tightenOnly maps a cap multiplier onto (0, 1]: zero (unset) and anything
 // above 1 become 1 (no change); only a genuine tightening passes through.
 func tightenOnly(v float64) float64 {
