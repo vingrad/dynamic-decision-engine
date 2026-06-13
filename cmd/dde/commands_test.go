@@ -4,8 +4,21 @@ import (
 	"testing"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/config"
+	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/policy"
 )
+
+func TestNewPlannerByok(t *testing.T) {
+	cfg := config.Default()
+	cfg.Planner = llm.PlannerName
+	p := newPlanner(cfg)
+	if _, ok := p.(*llm.ByokPlanner); !ok {
+		t.Fatalf("DDE_PLANNER=byok should build a *llm.ByokPlanner, got %T", p)
+	}
+	if p.Name() != llm.PlannerName {
+		t.Fatalf("planner name = %q, want %q", p.Name(), llm.PlannerName)
+	}
+}
 
 func TestPlannerFromSpec(t *testing.T) {
 	cfg := config.Default() // Planner "mock"

@@ -1,6 +1,7 @@
 import "./globals.css";
 import type { Metadata } from "next";
 import Link from "next/link";
+import { KeyPanel } from "@/components/KeyPanel";
 
 export const metadata: Metadata = {
   title: "DDE Admin",
@@ -8,8 +9,10 @@ export const metadata: Metadata = {
 };
 
 // Grafana URL is configurable; the admin UI links out to it for ops dashboards
-// rather than re-implementing operational monitoring.
-const grafanaURL = process.env.NEXT_PUBLIC_GRAFANA_URL || "http://localhost:3001";
+// rather than re-implementing operational monitoring. Defaults to the same-origin
+// /grafana subpath (served by the reverse proxy) so one built image works on any
+// host; nullish (??) so an explicit "" can disable rebaking.
+const grafanaURL = process.env.NEXT_PUBLIC_GRAFANA_URL ?? "/grafana";
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
@@ -26,6 +29,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href={grafanaURL} target="_blank" rel="noreferrer">
                 Grafana ↗
               </a>
+              <KeyPanel />
             </nav>
           </div>
         </header>

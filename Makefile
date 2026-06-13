@@ -65,11 +65,11 @@ docker-build: ## Build the API Docker image
 
 .PHONY: docker-up
 docker-up: ## Start the full local stack
-	docker compose up --build
+	docker compose -f docker-compose.dev.yml up --build
 
 .PHONY: docker-down
 docker-down: ## Stop the local stack and remove volumes
-	docker compose down -v
+	docker compose -f docker-compose.dev.yml down -v
 
 .PHONY: clean
 clean: ## Remove build artifacts

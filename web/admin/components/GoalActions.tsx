@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { browserApiBase } from "@/lib/api";
+import { llmHeaders } from "@/lib/byok";
 
 // GoalActions provides the two write operations a reviewer needs from the goal
 // detail page: generating the initial plan, and sending a signal that may trigger
@@ -18,7 +19,10 @@ export function GoalActions({ goalId, hasPlan }: { goalId: string; hasPlan: bool
     setBusy(true);
     setError(null);
     try {
-      const res = await fetch(`${browserApiBase()}/v1/goals/${goalId}/plans`, { method: "POST" });
+      const res = await fetch(`${browserApiBase()}/v1/goals/${goalId}/plans`, {
+        method: "POST",
+        headers: llmHeaders(),
+      });
       if (!res.ok) throw new Error(`Failed to generate plan (${res.status})`);
       router.refresh();
     } catch (err) {
@@ -35,7 +39,7 @@ export function GoalActions({ goalId, hasPlan }: { goalId: string; hasPlan: bool
     try {
       const res = await fetch(`${browserApiBase()}/v1/signals`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...llmHeaders() },
         body: JSON.stringify({ goal_id: goalId, kind: signalKind, description: signalDesc }),
       });
       if (!res.ok) throw new Error(`Failed to send signal (${res.status})`);

@@ -129,7 +129,11 @@ export async function listPlanVersions(id: string): Promise<PlanVersion[]> {
 }
 
 // browserApiBase is used by client components that call the API directly from the
-// browser; it must be a publicly reachable URL.
+// browser. It defaults to same-origin (""), so browser calls become relative
+// (e.g. fetch("/v1/goals")) and the reverse proxy routes them to the API. This
+// lets one built image serve any host without rebaking NEXT_PUBLIC_DDE_API_URL
+// (which is frozen at build time). Set the env var only to point the browser at a
+// different origin. Nullish (??) not || so an explicit "" stays same-origin.
 export function browserApiBase(): string {
-  return process.env.NEXT_PUBLIC_DDE_API_URL || "http://localhost:8080";
+  return process.env.NEXT_PUBLIC_DDE_API_URL ?? "";
 }

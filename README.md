@@ -424,7 +424,7 @@ go test ./... -race
 ### Run with Postgres
 
 ```bash
-docker compose up -d postgres
+docker compose -f docker-compose.dev.yml up -d postgres
 
 DATABASE_URL=postgres://dde:dde@localhost:5432/dde?sslmode=disable \
   go run ./cmd/dde serve
@@ -432,22 +432,41 @@ DATABASE_URL=postgres://dde:dde@localhost:5432/dde?sslmode=disable \
 
 ### Run the full stack (API + admin UI + observability)
 
-This is also the one-command **self-hosting** path: anyone can run the whole stack
+This is also the **self-hosting** path: anyone can run the whole stack
 on a home server, NAS, or mini-PC that has Docker. In the default configuration
 all goals, plans, versions, and history stay on that machine — your data never
 leaves your hardware.
 
 ```bash
-docker compose up --build
+docker compose -f docker-compose.dev.yml up --build
 ```
+
+A [Caddy](https://caddyserver.com/) reverse proxy fronts the stack as a single
+origin. **Open the app at http://localhost** — the browser talks to the API on
+the same origin (relative `/v1/*`), routed by Caddy. The individual service ports
+below are also published locally for debugging, but open the UI via
+**http://localhost** (not `:3000`): browser write actions issue same-origin
+requests and only reach the API through the proxy.
 
 | Service | URL | Notes |
 | --- | --- | --- |
-| API | http://localhost:8080 | REST API (`/health`, `/metrics`) |
-| Admin UI | http://localhost:3000 | Next.js console: goals, plans, versions, provenance |
+| **App (use this)** | **http://localhost** | Admin UI + API behind one origin (Caddy) |
+| API | http://localhost:8080 | REST API direct (`/health`, `/metrics`) — for curl/debugging |
+| Admin UI | http://localhost:3000 | Next.js server direct — SSR/debug only; browser writes need the proxy |
 | Prometheus | http://localhost:9090 | Scrapes the API's `/metrics` |
-| Grafana | http://localhost:3001 | Provisioned dashboard (admin / admin) |
+| Grafana | http://localhost/grafana | Provisioned dashboard (admin / admin), via the proxy |
 | Postgres | localhost:5432 | `dde` / `dde` |
+
+### Publish a public demo (Hetzner VPS, BYOK)
+
+A separate compose file runs the stack as a public, HTTPS demo where visitors
+bring their own LLM key. See **[docs/deploy.md](docs/deploy.md)** for the full
+guide. In short:
+
+```bash
+cp .env.prod.example .env.prod   # set DDE_DOMAIN + strong passwords
+docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+```
 
 ---
 

@@ -1,0 +1,105 @@
+# Production stack for the public VPS — complete and self-contained. Run with:
+#   docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
+#
+# Secrets/config come from .env.prod (see .env.prod.example): DDE_DOMAIN,
+# POSTGRES_PASSWORD, GF_SECURITY_ADMIN_PASSWORD, DDE_CORS_ALLOWED_ORIGINS.
+#
+# Caddy is the ONLY service that publishes ports (80/443) and auto-provisions a
+# Let's Encrypt cert for DDE_DOMAIN. Postgres, the API, the admin UI, Prometheus
+# and Grafana have no host ports — they are reachable only on the internal
+# network. DNS for DDE_DOMAIN must point here and 80/443 be open before first run.
+#
+# This file is intentionally separate from docker-compose.dev.yml (no shared base):
+# each environment is one file you can read top to bottom.
+name: dynamic-decision-engine
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: dde
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}"
+      POSTGRES_DB: dde
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U dde -d dde"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      DDE_HTTP_ADDR: ":8080"
+      DATABASE_URL: "postgres://dde:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env.prod}@postgres:5432/dde?sslmode=disable"
+      DDE_LOG_FORMAT: "json"
+      # Bring-your-own-key planner: visitors supply their own LLM key (X-LLM-*
+      # headers); keyless requests fall back to the deterministic mock.
+      DDE_PLANNER: "byok"
+      DDE_CORS_ALLOWED_ORIGINS: "${DDE_CORS_ALLOWED_ORIGINS:-https://${DDE_DOMAIN}}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  admin:
+    build:
+      context: ./web/admin
+      dockerfile: Dockerfile
+    environment:
+      DDE_API_URL: "http://api:8080"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  caddy:
+    image: caddy:2-alpine
+    environment:
+      # The public hostname; Caddy auto-issues/renews a Let's Encrypt cert for it.
+      DDE_SITE_ADDRESS: "${DDE_DOMAIN:?set DDE_DOMAIN in .env.prod}"
+    volumes:
+      - ./deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - api
+      - admin
+    restart: unless-stopped
+
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./deploy/observability/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+
+  grafana:
+    image: grafana/grafana:latest
+    environment:
+      GF_SECURITY_ADMIN_USER: "${GF_SECURITY_ADMIN_USER:-admin}"
+      GF_SECURITY_ADMIN_PASSWORD: "${GF_SECURITY_ADMIN_PASSWORD:?set GF_SECURITY_ADMIN_PASSWORD in .env.prod}"
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      # Served under the /grafana subpath behind the proxy.
+      GF_SERVER_ROOT_URL: "https://${DDE_DOMAIN}/grafana"
+      GF_SERVER_SERVE_FROM_SUB_PATH: "true"
+    volumes:
+      - ./deploy/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - grafana-data:/var/lib/grafana
+    depends_on:
+      - prometheus
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  grafana-data:
+  caddy_data:
+  caddy_config:

@@ -23,6 +23,7 @@ func (s *Server) Handler() http.Handler {
 	r.Use(s.requestLogger)
 	r.Use(middleware.Recoverer)
 	r.Use(s.corsMiddleware)
+	r.Use(s.llmCredentialsMiddleware)
 	r.Use(s.metrics.middleware)
 
 	// The per-request timeout wraps the operational and REST routes only: MCP
