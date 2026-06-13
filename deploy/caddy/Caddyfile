@@ -1,0 +1,41 @@
+# Single front door for the whole stack. The browser always talks to this origin;
+# Caddy routes by path so the frontend can use relative /v1/* calls (same-origin),
+# which removes the build-time NEXT_PUBLIC API URL problem and makes CORS moot.
+#
+# DDE_SITE_ADDRESS is "http://localhost" locally (plain HTTP, no TLS) and the
+# public domain in production (Caddy then auto-provisions a Let's Encrypt cert).
+{$DDE_SITE_ADDRESS:http://localhost} {
+	encode gzip
+
+	# MCP is a long-lived Server-Sent-Events stream. Disable response buffering so
+	# events flush to the client immediately instead of being held by the proxy.
+	handle /mcp* {
+		reverse_proxy api:8080 {
+			flush_interval -1
+		}
+	}
+
+	# REST API and health checks go to the engine. NOTE: /metrics is deliberately
+	# NOT routed here, so Prometheus metrics are unreachable from the public
+	# internet — Prometheus scrapes api:8080/metrics over the internal network.
+	@api path /v1 /v1/* /health /health/*
+	handle @api {
+		reverse_proxy api:8080
+	}
+
+	# Grafana under a subpath. The prefix is preserved (not stripped) because
+	# Grafana itself serves from /grafana via GF_SERVER_SERVE_FROM_SUB_PATH.
+	# Consider putting `basic_auth` here before exposing it on a public demo.
+	handle /grafana* {
+		reverse_proxy grafana:3000
+	}
+
+	# Everything else is the Next.js admin UI.
+	handle {
+		reverse_proxy admin:3000
+	}
+
+	# NOTE: per-IP rate limiting for the public demo is not configured here because
+	# the `rate_limit` directive needs a custom Caddy build (xcaddy). Add it — or an
+	# app-level limiter — before opening the demo to heavy traffic.
+}

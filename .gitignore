@@ -6,8 +6,11 @@ CLAUDE.md
 /dist/
 coverage.out
 
-# Environment
+# Environment (secrets — never commit). .env.example / .env.prod.example are templates.
 .env
+.env.*
+!.env.example
+!.env.prod.example
 
 # OS / editor
 .DS_Store

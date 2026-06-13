@@ -70,6 +70,16 @@ func buildProvider(name string, cfg config.Config) llm.Planner {
 			BaseURL:   cfg.LLMBaseURL,
 			MaxTokens: cfg.LLMMaxTokens,
 		})
+	case llm.PlannerName: // "byok"
+		// Bring-your-own-key: each request supplies its own provider+key (see
+		// internal/llm/byok.go). With no key it falls back to the mock, so a public
+		// demo runs without the operator holding any key.
+		return llm.NewByokPlanner(llm.ByokConfig{
+			Fallback:  llm.NewMockPlanner(),
+			Model:     cfg.LLMModel,
+			BaseURL:   cfg.LLMBaseURL,
+			MaxTokens: cfg.LLMMaxTokens,
+		})
 	default: // "mock", "finance", or anything else -> deterministic mock base
 		return llm.NewMockPlanner()
 	}
@@ -189,7 +199,10 @@ func newEngine(cfg config.Config, reg *pack.Registry, pol policy.Policy, cacheOb
 		return nil, err
 	}
 	var cache, financeCache llm.PlanCache
-	if cfg.PlanCacheSize > 0 {
+	// The text plan cache keys on planner name + prompt. Under byok the base name
+	// is constant ("byok") regardless of which key (or the mock fallback) produced
+	// a result, so caching would serve one visitor's plan to another. Skip it.
+	if cfg.PlanCacheSize > 0 && cfg.Planner != llm.PlannerName {
 		// Text/LLM plans are deterministic -> no expiry. Finance plans depend on
 		// as-of market data -> TTL expiry so they refresh.
 		cache = llm.NewMemoryCache(cfg.PlanCacheSize)
@@ -275,7 +288,15 @@ func buildService(ctx context.Context, cfg config.Config, log *slog.Logger, metr
 		}, log, metrics)
 		opts = append(opts, app.WithNotifier(hooks))
 	}
-	if cfg.ReplanAsync {
+	// BYOK credentials live only on the request context and are never persisted,
+	// so a deferred async worker (or crash recovery) cannot carry the visitor's
+	// key — it would silently fall back to the mock. Force the synchronous inline
+	// queue under byok so the key always reaches the planner.
+	asyncReplan := cfg.ReplanAsync && cfg.Planner != llm.PlannerName
+	if cfg.ReplanAsync && !asyncReplan {
+		log.Warn("async replanning disabled under byok planner: per-request keys can't reach a background worker; using inline replanning")
+	}
+	if asyncReplan {
 		opts = append(opts,
 			app.WithReplanQueue(app.NewMemoryQueue(cfg.ReplanWorkers, 1024, log, app.WithQueueTimeout(cfg.ReplanTimeout))),
 			app.WithReplanRetries(cfg.ReplanMaxRetries),
@@ -284,7 +305,7 @@ func buildService(ctx context.Context, cfg config.Config, log *slog.Logger, metr
 	svc := app.New(repo, eng, opts...)
 	// Re-enqueue replans left pending by a previous crash (async only — the
 	// in-memory queue loses scheduled work on restart; inline never does).
-	if cfg.ReplanAsync {
+	if asyncReplan {
 		go func() {
 			n, err := svc.RecoverPending(ctx)
 			if err != nil {

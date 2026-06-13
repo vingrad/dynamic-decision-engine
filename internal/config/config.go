@@ -31,7 +31,8 @@ type Config struct {
 	// LogFormat is "json" or "text".
 	LogFormat string `json:"log_format" yaml:"log_format"`
 	// Planner selects the reasoning backend: "mock" (default), "anthropic",
-	// "openai", "deepseek", or "multi" (a multi-model composition).
+	// "openai", "deepseek", "byok" (per-request bring-your-own-key with a mock
+	// fallback), or "multi" (a multi-model composition).
 	Planner string `json:"planner" yaml:"planner"`
 	// MultiMode selects the multi-model strategy when Planner=="multi":
 	// "verify", "route" or "ensemble".
@@ -382,7 +383,7 @@ func (c Config) Validate() error {
 		return fmt.Errorf("config: invalid log_format %q", c.LogFormat)
 	}
 	switch c.Planner {
-	case "mock", "anthropic", "openai", "deepseek", "finance":
+	case "mock", "anthropic", "openai", "deepseek", "finance", "byok":
 	case "multi":
 		switch c.MultiMode {
 		case "verify", "route", "ensemble":

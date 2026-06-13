@@ -6,6 +6,7 @@ import (
 	"net/http"
 
 	"github.com/vingrad/dynamic-decision-engine/internal/app"
+	"github.com/vingrad/dynamic-decision-engine/internal/llm"
 	"github.com/vingrad/dynamic-decision-engine/internal/storage"
 )
 
@@ -45,6 +46,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.As(err, &validation):
 		writeError(w, http.StatusBadRequest, validation.Msg)
+	case errors.Is(err, llm.ErrUnsupportedProvider):
+		writeError(w, http.StatusBadRequest, "unsupported LLM provider; use anthropic, openai, or deepseek")
 	case errors.Is(err, storage.ErrNotFound):
 		writeError(w, http.StatusNotFound, "resource not found")
 	case errors.Is(err, app.ErrPlanExists):

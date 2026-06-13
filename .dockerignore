@@ -1,0 +1,31 @@
+# Keep the Go (api) build context small and free of secrets/artifacts. The api
+# image is built from the repo root (context: .), so everything not needed by the
+# Go build is excluded here.
+.git
+.github
+.claude
+CLAUDE.md
+
+# Build artifacts
+bin/
+dist/
+coverage.out
+
+# Secrets and local env
+.env
+.env.*
+!.env.example
+!.env.prod.example
+
+# Frontend workspace (the admin image has its own build context + .dockerignore)
+web/admin/node_modules
+web/admin/.next
+
+# Docs, deploy config and examples are not needed to compile the binary
+docs
+deploy
+examples
+*.md
+
+# OS / editor
+.DS_Store
