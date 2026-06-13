@@ -84,7 +84,7 @@ func TestValidateSeverities(t *testing.T) {
 }
 
 func TestValidateStrategies(t *testing.T) {
-	strat := func(id string, regimes ...string) StrategyDescriptor {
+	strategy := func(id string, regimes ...string) StrategyDescriptor {
 		return StrategyDescriptor{ID: id, Name: id, Regimes: regimes}
 	}
 	cases := []struct {
@@ -93,12 +93,12 @@ func TestValidateStrategies(t *testing.T) {
 		ok   bool
 	}{
 		{"no strategies", Descriptor{ID: "growth"}, true},
-		{"valid set", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a"), strat("b", "trend")}}, true},
-		{"single gated strategy", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a", "trend")}}, true},
-		{"generic may not compete", Descriptor{ID: DefaultDomain, Strategies: []StrategyDescriptor{strat("a"), strat("b")}}, false},
-		{"empty id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat(" "), strat("b")}}, false},
-		{"duplicate id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a"), strat("a")}}, false},
-		{"all strategies gated", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strat("a", "trend"), strat("b", "range")}}, false},
+		{"valid set", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strategy("a"), strategy("b", "trend")}}, true},
+		{"single gated strategy", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strategy("a", "trend")}}, true},
+		{"generic may not compete", Descriptor{ID: DefaultDomain, Strategies: []StrategyDescriptor{strategy("a"), strategy("b")}}, false},
+		{"empty id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strategy(" "), strategy("b")}}, false},
+		{"duplicate id", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strategy("a"), strategy("a")}}, false},
+		{"all strategies gated", Descriptor{ID: "growth", Strategies: []StrategyDescriptor{strategy("a", "trend"), strategy("b", "range")}}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
