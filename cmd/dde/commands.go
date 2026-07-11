@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -410,16 +411,35 @@ type evaluateInput struct {
 	SignalNote string         `json:"signal_note"`
 }
 
-// newEvaluateCommand runs the planner against an input file and prints the plan.
+// newEvaluateCommand runs the planner against a goal — given as a plain-text
+// phrase or a structured JSON file — and prints the plan.
 func newEvaluateCommand() *cobra.Command {
 	var input string
+	var domainKey string
 	cmd := &cobra.Command{
-		Use:   "evaluate",
-		Short: "Generate a ranked plan from a goal+context JSON file",
-		RunE: func(cmd *cobra.Command, _ []string) error {
+		Use:   `evaluate ["goal in plain text"]`,
+		Short: "Generate a ranked plan from a goal (plain text or a goal+context JSON file)",
+		Long: "Generate a ranked plan from a goal.\n\n" +
+			"The fastest path is a plain-text goal:\n\n" +
+			`  dde evaluate "find the first 10 paying customers in 3 months"` + "\n\n" +
+			"A structured goal+context JSON file (--input) gives the planner more to\n" +
+			"work with: situation, facts, assets and constraints. See examples/.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
 			var in evaluateInput
-			if err := readJSONFile(input, &in); err != nil {
-				return err
+			switch {
+			case len(args) == 1 && strings.TrimSpace(args[0]) != "":
+				if input != "" {
+					return fmt.Errorf("pass either a plain-text goal or --input, not both")
+				}
+				in.Domain = domainKey
+				in.Objective = strings.TrimSpace(args[0])
+			case input != "":
+				if err := readJSONFile(input, &in); err != nil {
+					return err
+				}
+			default:
+				return fmt.Errorf(`pass a goal ('dde evaluate "..."') or --input file.json`)
 			}
 			svc, err := newMemoryService()
 			if err != nil {
@@ -439,8 +459,8 @@ func newEvaluateCommand() *cobra.Command {
 			return printJSON(version)
 		},
 	}
-	cmd.Flags().StringVar(&input, "input", "", "path to a goal+context JSON file (required)")
-	_ = cmd.MarkFlagRequired("input")
+	cmd.Flags().StringVar(&input, "input", "", "path to a goal+context JSON file")
+	cmd.Flags().StringVar(&domainKey, "domain", "", "domain for a plain-text goal (default: generic)")
 	return cmd
 }
 
