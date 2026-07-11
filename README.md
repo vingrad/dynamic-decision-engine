@@ -1,22 +1,76 @@
 # Dynamic Decision Engine
 
-**A production-oriented Go engine for AI-assisted decision planning, dynamic replanning, and versioned decision state.**
+**A Go engine that turns AI recommendations into versioned, auditable, self-updating decisions.**
 
-Dynamic Decision Engine helps systems generate, rank, version, and update structured action plans based on goals, context, constraints, signals, and outcomes.
+Ask an LLM "what should we do?" and you get a paragraph of advice that is
+stale the moment the world moves, and forgotten the moment the tab closes.
+This engine keeps the *decision* instead: what was known at the time, which
+options were considered, why #1 beat #2, what changed later, and whether it
+actually worked.
 
-It is built for use cases where a system should not simply ask an LLM “what should we do?”, but instead maintain a traceable, versioned decision process:
+---
 
-* What goal are we optimizing for?
-* What context and constraints were known at the time?
-* Which possible moves were considered?
-* Why was one action path ranked higher than another?
-* What changed later?
-* Did the plan get updated?
-* What outcome did the previous decision produce?
+## See it in 30 seconds
 
-The project focuses on **decision infrastructure**, not chatbot coaching.
+Requirements: Go 1.25+. No database, no API keys, fully offline.
 
-How it works at a glance:
+```bash
+go run ./cmd/dde demo
+```
+
+One command walks the entire decision loop on a built-in scenario and
+narrates each step:
+
+```text
+[1/5] GOAL — the objective and what is known at decision time
+      "Grow the product to 1,000 paying customers within two quarters"
+      assets:      founder network in target vertical · high net revenue retention
+      constraints: limited engineering capacity · 12 months runway
+
+[2/5] PLAN v1 — ranked moves, not a paragraph of advice
+      #1 Double down on founder network in target vertical
+         confidence 0.76 · impact high · effort medium · risk low
+      ...
+      and a kill criterion a machine can check: "No movement in paying
+      customers after the full window"
+
+[3/5] SIGNAL — the world changed
+      competitive_shift: A well-funded competitor just launched a free tier...
+      material: true — confidence on the top move shifted materially
+
+[4/5] PLAN v2 — appended, v1 is kept, the diff is explainable
+      #1 Double down on founder network...  (confidence 0.76 → 0.61)
+      provenance: planner=mock snapshot=snap_... (reproducible)
+
+[5/5] OUTCOME — reality is recorded against the exact move acted on
+      (plan v1, move #1) "Double down on founder network..." → failure
+```
+
+That loop — **goal → plan v1 → signal → materiality decision → plan v2 →
+outcome** — is the whole product. Everything else in this README builds on it.
+
+Variants:
+
+```bash
+go run ./cmd/dde demo investing      # a thesis break drops a sized position's confidence 0.75 → 0.00
+go run ./cmd/dde evaluate "find the first 10 paying customers in 3 months"   # your own goal, plain text
+DDE_PLANNER=anthropic go run ./cmd/dde demo   # the same loop with a real LLM (BYOK)
+```
+
+---
+
+## The four concepts that matter
+
+| Concept | What it is |
+| --- | --- |
+| **Goal** | The objective plus what is known at decision time: situation, facts, assets, constraints. The durable identity everything else keys off. |
+| **Plan version** | An immutable, ranked set of moves — each with confidence, impact/effort/risk, rationale, and an experiment with success signals and kill criteria. Never overwritten: v1 → v2 → … |
+| **Signal** | New information pushed in. The engine judges whether it is *material*; if yes, it replans into a new version, if no, the reason is recorded. |
+| **Outcome** | A real-world result recorded against a move's stable address `(plan_version, move_rank)`, so confidence can be tested against reality. |
+
+Everything else — players, experiments, provenance, domains, strategies,
+data sources — hangs off these four. Full vocabulary and invariants:
+[`docs/concepts.md`](docs/concepts.md).
 
 ```mermaid
 flowchart TD
@@ -34,10 +88,7 @@ flowchart TD
 
 ## Why this exists
 
-Most LLM applications treat a recommendation as the end of the conversation:
-you ask "what should we do?", get a paragraph of text, and the system forgets
-it ever answered.
-
+Most LLM applications treat a recommendation as the end of the conversation.
 That breaks down the moment a decision matters:
 
 * **No accountability.** When the plan turns out wrong, there is no record of
@@ -50,26 +101,16 @@ That breaks down the moment a decision matters:
   produced them, so confidence is never tested against reality.
 
 A real decision system treats a recommendation as a versioned, auditable
-object: ranked moves with explicit confidence and rationale, experiments with
-success signals and kill criteria, fallback options, immutable plan versions
-with full provenance — and replanning when a material signal arrives.
-
-This project builds exactly that, as a clean, production-oriented backend
-component.
-
-If you're building agents, decision-support tools, or anything where *"why did
-it recommend that?"* must have an answer, this is the missing layer — see
-[Use cases](#use-cases) for what that means concretely.
-
----
-
-## Core idea
-
-Instead of returning a single `next_best_action`, the engine returns ranked action paths with rationale, experiments, fallbacks, and provenance — and keeps them versioned as the world changes (see the flow above).
+object — and replans when a material signal arrives. This project builds
+exactly that, as a clean, production-oriented backend component. If you're
+building agents, decision-support tools, or anything where *"why did it
+recommend that?"* must have an answer, this is the missing layer.
 
 ---
 
 ## Example output
+
+Every plan version is structured data, not prose:
 
 ```json
 {
@@ -88,18 +129,11 @@ Instead of returning a single `next_best_action`, the engine returns ranked acti
       "experiment": {
         "title": "Contact 30 AI automation agency founders in 7 days",
         "duration_days": 7,
-        "success_signals": [
-          "5+ qualified replies",
-          "2+ discovery calls",
-          "1 paid pilot conversation"
-        ],
-        "kill_criteria": [
-          "No qualified replies after 50 targeted contacts"
-        ]
+        "success_signals": ["5+ qualified replies", "2+ discovery calls"],
+        "kill_criteria": ["No qualified replies after 50 targeted contacts"]
       },
       "fallback_moves": [
-        "Test SaaS support teams with an AI-assisted refund decision workflow",
-        "Reposition around approval-controlled AI agent actions"
+        "Test SaaS support teams with an AI-assisted refund decision workflow"
       ]
     }
   ],
@@ -117,307 +151,102 @@ Instead of returning a single `next_best_action`, the engine returns ranked acti
 
 ## What makes it different
 
-### 1. Plans are versioned
+### Plans are versioned, replanning is signal-driven
 
-A plan is not overwritten when new information arrives.
+A plan is never overwritten. New material signals create new immutable plan
+versions (`v1 → v2`); immaterial signals are recorded with the reason no new
+version was created. Per-domain materiality thresholds decide what justifies
+a new version, so consumers see meaningful updates only.
 
-New signals create new immutable plan versions.
+### LLMs are a boundary, not the architecture
 
-```text
-plan v1 → signal arrives → plan v2
-```
+The default planner is deterministic and runs without API keys — testable,
+reproducible, offline, CI-friendly, private by default. Real planners ship
+behind the same interface for **Anthropic Claude**, **OpenAI** and
+**DeepSeek** (BYOK), and **multi-model** composition adds cross-provider
+verify / cost routing / agreement ensembles, all recorded in provenance.
 
-This makes the decision process auditable and explainable.
+> 📖 Providers, env switches, multi-model modes: [`docs/planners.md`](docs/planners.md)
 
----
+### Decisions can pull live data
 
-### 2. Replanning is signal-driven
+The engine can fetch fresh state (prices, availability, balances, research)
+right before planning and fold it into the goal context. Sources sit behind
+one mechanism-agnostic interface — HTTP/REST, MCP servers, AI agents,
+in-process read-models — every source consulted lands in the input snapshot
+and provenance, a source outage degrades instead of blocking, and the whole
+mechanism is off by default so the offline path stays byte-for-byte
+reproducible.
 
-The engine is designed to update recommendations when relevant signals arrive.
+The same BYOK posture applies to **market data** for the investing domain:
+offline fixtures by default, real vendors (Financial Modeling Prep + keyless
+Stooq fallback) one env switch away, behind a TTL cache and rate limiting.
+Backtests always run on offline fixtures so they stay reproducible and
+lookahead-free.
 
-Examples:
+> 📖 Sources, market data, vendor chains: [`docs/domains.md`](docs/domains.md)
 
-* a customer replies
-* an experiment fails
-* a new market signal appears
-* a constraint changes
-* a metric improves or deteriorates
-* a user reports a real-world outcome
+### Domain packs
 
----
+Pure-data descriptors supply a domain's vocabulary, prompt guidance, scoring
+and validation. Four ship today — `generic`, `investing` (numeric
+deterministic scorer over point-in-time market data), `growth`, `career` —
+and new domains load from a config file, no code.
 
-### 3. LLMs are a boundary, not the architecture
+### A measurable learning loop
 
-The default planner is deterministic and runs without API keys.
+Outcomes are recorded against the exact move acted on; `dde calibrate` fits
+stated confidence to observed reality, and the backtest harness scores
+decision quality (Brier score, kill precision/recall, noise robustness)
+before a scoring change ships.
 
-That makes the system:
+### Built as infrastructure
 
-* testable
-* reproducible
-* usable offline
-* suitable for CI
-* safe to run out of the box
-* private by default — in the default configuration the engine and all decision
-  data stay on your own hardware; nothing leaves the machine, which makes it a
-  good fit for a self-hosted home-server deployment (see [Quick start](#quick-start))
-
-Want real AI planning? Bring your own key. Real planners ship behind the same
-interface for **Anthropic Claude**, **OpenAI**, and **DeepSeek** — select one with
-`DDE_PLANNER=anthropic|openai|deepseek` (BYOK) and the matching API key
-(`ANTHROPIC_API_KEY` / `OPENAI_API_KEY` / `DEEPSEEK_API_KEY`). Each elicits the
-structured plan via a forced tool/function call and records token usage and latency
-as provenance. (DeepSeek is served through the OpenAI-compatible adapter.) Note that
-enabling a cloud provider sends your inputs to that provider's API; the
-deterministic mock remains the default so the system runs fully local, offline, and
-in CI with no key.
-
-**Local AI inference is planned.** A self-hosted LLM planner (via an
-OpenAI-compatible endpoint — specific provider to be decided) is on the
-[roadmap](#roadmap), so AI-assisted planning will eventually run entirely on your
-own hardware with no cloud dependency. (The OpenAI-compatible adapter already
-accepts a custom endpoint via `DDE_LLM_BASE_URL`.)
-
-The same BYOK posture applies to **market data** for the investing domain: the
-offline fixture provider is the default, and real vendors are one env switch
-away — `DDE_MARKETDATA_PROVIDER=http DDE_MARKETDATA_VENDOR=fmp,stooq` chains
-Financial Modeling Prep (quotes, fundamentals, EOD bars; `DDE_MARKETDATA_API_KEY`)
-with keyless Stooq (EOD bars, availability subject to its anti-bot protection) as
-fallback, behind a TTL cache and per-vendor rate limiting. A vendor outage never
-kills a decision — the chain falls through and the planner degrades. Free tiers
-are for dev/demo (typically non-commercial); bring your own paid key for
-production use. Backtests always run on offline fixtures so they
-stay reproducible and lookahead-free — see
-[`docs/domains.md`](docs/domains.md#market-data-point-in-time).
-
-**Multi-model planning** (`DDE_PLANNER=multi`) composes models by *role*, each
-recorded in provenance for auditability:
-
-* **verify** — one provider proposes, a *different* provider critiques (drops weak
-  moves, re-calibrates confidence). Best for calibration + auditability.
-* **route** — a cheap model handles the common case; escalates to a stronger model
-  on low confidence or when a material signal arrives. A cost lever.
-* **ensemble** — several providers run in parallel; agreement on the top move
-  scales its confidence (divergence lowers it). An uncertainty signal.
-
-```bash
-# verify: Claude proposes, GPT reviews
-DDE_PLANNER=multi DDE_MULTI_MODE=verify DDE_MULTI_PROVIDERS=anthropic,openai dde serve
-# keyless offline demo (ensemble of two mock planners)
-DDE_PLANNER=multi DDE_MULTI_MODE=ensemble DDE_MULTI_PROVIDERS=mock,mock \
-  dde evaluate --input examples/founder-growth.json
-```
-
----
-
-### 4. Decisions can pull live data
-
-A goal's context goes stale the moment it's written. The engine can **fetch fresh
-state** (prices, availability, balances, research) right before planning and fold it
-into the goal context, so the planner reasons over the world *now* — not a snapshot
-from goal-creation time.
-
-Sources sit behind one mechanism-agnostic interface: **HTTP/REST, MCP servers,
-autonomous AI agents, and in-process read-models** all look the same to the engine. A
-domain declares which sources it consults; non-deterministic sources (agents, live
-APIs) keep their non-determinism sealed inside the fetch, and every source consulted
-is recorded in provenance.
-
-* **Deterministic & auditable** — fetched data lands in the input snapshot, so the
-  same world-state always reproduces the same decision; raw payloads, fetch times and
-  source identity are kept for audit.
-* **Opt-in & safe** — off by default (`DDE_SOURCES_ENABLED`), so the offline mock path
-  stays byte-for-byte reproducible.
-* **Never blocks** — a source outage degrades to a *stale* contribution (optionally
-  serving a last-good cached value); the decision is still produced.
-
-```bash
-DDE_DOMAINS=examples/domains.yaml \
-DDE_SOURCES_ENABLED=true DDE_SOURCES=examples/sources.yaml \
-dde evaluate --input examples/purchasing-goal.json
-```
-
-> 📖 **Wiring sources, the source interface, and the agentic-planner roadmap:** [`docs/domains.md`](docs/domains.md)
-
----
-
-### 5. Built as infrastructure
-
-The project is designed as a backend system, not a prompt collection.
-
-Implemented architecture principles:
-
-* Go-based core
-* clean domain model
-* context propagation
-* structured logging
-* request IDs
-* immutable plan versions
-* decision provenance
-* transactional persistence
-* Postgres-backed horizontal scalability
-* in-memory mode for tests and local development
-* deterministic planner for reproducible tests
-* REST API and CLI interface
-
----
-
-## Core concepts
-
-### Player
-
-The person, team, company, or system pursuing a goal.
-
-### Goal
-
-The objective the system is planning around.
-
-Examples:
-
-* find first paying customers
-* choose a technical architecture
-* reduce churn
-* evaluate a market entry path
-* improve career leverage
-* prioritize product experiments
-
-### Context
-
-The current known situation: facts, assets, constraints, assumptions, and available options.
-
-### Move
-
-A possible strategic action.
-
-Moves are ranked by expected impact, effort, risk, confidence, and rationale.
-
-### Experiment
-
-A concrete test attached to a move.
-
-Each experiment can define:
-
-* duration
-* success signals
-* kill criteria
-* expected learning
-
-### Signal
-
-A new piece of information that may change the plan.
-
-### Data Source
-
-An external provider the engine consults *before* planning to enrich the goal context
-with live state (prices, availability, research). Where a **Signal** is pushed in to
-say "something changed, reconsider", a **Data Source** is pulled at decision time to
-answer "what is true right now". Sources are pluggable — HTTP/REST, MCP servers, AI
-agents, or in-process read-models — behind one interface, and each is recorded in
-provenance.
-
-### Outcome
-
-A real-world result produced by an executed move. It references the move by its
-stable address in the immutable plan — `(plan_version, move_rank)` — and the move
-title is snapshotted server-side, so an outcome always points at the exact move
-that was acted on even after later replans regenerate the move set.
-
-### Plan Version
-
-An immutable snapshot of a recommendation at a point in time.
-
-### Provenance
-
-Metadata explaining how a plan was generated, from which input snapshot, with which planner, prompt version, and model.
+Go core, clean domain model, context propagation, structured logging, request
+IDs, transactional persistence, Postgres-backed horizontal scalability,
+in-memory mode for tests and local development, REST API + CLI + MCP.
 
 ---
 
 ## Use cases
 
-Three kinds of builders hit the problems this engine solves. Here is what it
-provides for each.
-
 ### AI agents that act
 
-An agent that acts autonomously needs more than a chat reply — it needs a plan
-it can execute mechanically, abort safely, and answer for later.
-
-* **An MCP server built in** — `dde mcp` (stdio) or `/mcp` (streamable HTTP):
-  agents create goals, fetch ranked plans, submit signals and record outcomes
-  with zero integration code.
-* **Machine-actionable moves** — every move carries confidence, expected
-  impact, effort, risk, explicit dependencies (a DAG, so the agent knows what
-  can run in parallel), fallback moves, and an experiment with success signals
-  and kill criteria it can check mechanically.
-* **Signal-driven replanning** — when the world changes, the agent submits a
-  signal; the engine decides whether it is material and versions the plan,
-  instead of the agent re-prompting from scratch and losing history.
-* **Webhooks** — `replan.completed`, `outcome.recorded` and friends trigger
-  downstream automation without polling.
+An agent needs more than a chat reply — it needs a plan it can execute
+mechanically, abort safely, and answer for later. The engine gives it an MCP
+server built in (`dde mcp` or `/mcp`), machine-actionable moves (confidence,
+explicit dependency DAG, fallbacks, kill criteria it can check mechanically),
+signal-driven replanning instead of re-prompting from scratch, and webhooks
+(`replan.completed`, `outcome.recorded`, …) to trigger downstream automation.
 
 ### Decision-support products
 
 A product that recommends actions to humans — growth experiments, operations,
-investing, sales — must explain its ranking, stay current as data changes, and
-not spam users with churn.
-
-* **Ranked alternatives, not one answer** — each move carries a rationale and
-  expected impact / effort / risk, so the UI can show *why #1 beat #2*.
-* **Domain packs** — pure-data descriptors supply the domain's vocabulary,
-  prompt guidance, scoring and validation; four ship today (`generic`,
-  `investing` with a numeric deterministic scorer over point-in-time market
-  data, `growth`, `career`), and new domains load from a config file.
-* **Live context** — external sources (HTTP, MCP, AI agents) are fetched at
-  decision time and folded into the input snapshot, so plans reason over the
-  world *now*, not goal-creation time.
-* **Materiality thresholds** — per-domain confidence deltas decide which
-  signals justify a new plan version, so users see meaningful updates only.
-* **A measurable learning loop** — outcomes are recorded against the exact
-  move acted on; `dde calibrate` fits stated confidence to observed reality,
-  and the backtest harness scores decision quality (Brier score, kill
-  precision/recall, noise robustness) before a scoring change ships.
+investing, sales — must explain its ranking, stay current as data changes,
+and not spam users with churn. The engine provides ranked alternatives with
+rationale (so the UI can show *why #1 beat #2*), live context at decision
+time, materiality thresholds, and a measurable learning loop.
 
 ### Anything that must answer "why did it recommend that?"
 
-After the fact — an incident review, a compliance question, a postmortem — you
-must reconstruct what was known, what was considered, and why one path ranked
-above another.
-
-* **Input snapshots** — every decision records a fingerprint of exactly what
-  the planner saw (goal, context, fetched data, signal), so the decision state
-  at reasoning time is reproducible.
-* **Full provenance** — planner, model, prompt version, domain-pack version,
-  token usage, every multi-model contributor and its role, and every data
-  source consulted, with raw payload and fetch time.
-* **Immutable history** — plans are never overwritten; every revision is an
-  append-only version, and immaterial signals are recorded with the reason no
-  new version was created.
-* **Outcome addressing** — results reference `(plan_version, move_rank)`, so
-  an outcome always points at the exact move that was acted on, even after
-  later replans regenerate the move set.
-
-> 📖 **Domains, the investing pack, external data sources, policy, async replanning and backtesting:** [`docs/domains.md`](docs/domains.md)
+After the fact — an incident review, a compliance question, a postmortem —
+you must reconstruct what was known, what was considered, and why one path
+ranked above another. Input snapshots, full provenance (planner, model,
+prompt version, token usage, every contributor and data source), immutable
+history, and stable outcome addressing make that reconstruction mechanical.
 
 ---
 
 ## Quick start
 
-Requirements: Go 1.25+. No database or API keys required — the default store is in-memory and the default planner is deterministic.
-
-### Run a local evaluation
+### Run it (no database, no keys)
 
 ```bash
-go run ./cmd/dde evaluate --input examples/founder-growth.json
-```
-
-### Start the API
-
-```bash
-go run ./cmd/dde serve
-```
-
-### Run tests
-
-```bash
+go run ./cmd/dde demo                     # the full loop, narrated
+go run ./cmd/dde demo investing           # same loop, numeric finance planner
+go run ./cmd/dde evaluate "your goal in one sentence"
+go run ./cmd/dde evaluate --input examples/founder-growth.json   # structured goal+context
+go run ./cmd/dde serve                    # REST API + streamable HTTP MCP
 go test ./... -race
 ```
 
@@ -473,12 +302,15 @@ docker compose -f docker-compose.prod.yml --env-file .env.prod up -d --build
 ## CLI
 
 ```bash
-dde evaluate --input examples/investing-thesis.json
-dde signal --input examples/signal-update.json
-dde backtest --input internal/backtest/testdata/scenario.json
-dde migrate
-dde serve
-dde mcp
+dde demo [growth|investing]         # walk the full decision loop, narrated
+dde evaluate "goal in plain text"   # ranked plan from a one-sentence goal
+dde evaluate --input goal.json      # ranked plan from structured goal+context
+dde signal --input signal.json      # apply a signal, see the replanning decision
+dde backtest --input scenario.json  # replay a signal timeline, score decision quality
+dde calibrate                       # fit confidence to recorded outcomes
+dde migrate                         # apply database migrations
+dde serve                           # REST API (+ /mcp)
+dde mcp                             # MCP server over stdio
 dde version
 ```
 
@@ -488,39 +320,14 @@ dde version
 
 > 📖 **Full API reference — request/response payloads for every endpoint:** [`docs/api.md`](docs/api.md)
 
-### Stateless evaluation
-
-```http
-POST /v1/evaluate
-```
-
-Generates a ranked action plan without persisting state.
-
-### Create a goal
-
-```http
-POST /v1/goals
-```
-
-### Generate an initial plan
-
-```http
-POST /v1/goals/{id}/plans
-```
-
-### Submit a signal
-
-```http
-POST /v1/signals
-```
-
-Stores a signal and triggers replanning if the signal is material.
-
-### List plan versions
-
-```http
-GET /v1/plans/{id}/versions
-```
+| Endpoint | Purpose |
+| --- | --- |
+| `POST /v1/evaluate` | Stateless: generate a ranked plan without persisting |
+| `POST /v1/goals` | Create a goal |
+| `POST /v1/goals/{id}/plans` | Generate the initial plan |
+| `POST /v1/signals` | Submit a signal; replans if material |
+| `GET /v1/plans/{id}/versions` | List immutable plan versions |
+| `POST /v1/outcomes` | Record a result against `(plan_version, move_rank)` |
 
 ---
 
@@ -536,9 +343,6 @@ code.
 dde mcp        # stdio — point Claude Code/Desktop at {"command": "dde", "args": ["mcp"]}
 dde serve      # also mounts streamable HTTP MCP at http://localhost:8080/mcp
 ```
-
-Both transports share the engine's semantics with REST; the `/mcp` endpoint
-shares the live service with the API.
 
 > 📖 **Tool reference, transports and agent-loop guidance:** [`docs/mcp.md`](docs/mcp.md)
 
@@ -593,61 +397,19 @@ For the full layering, replanning loop, and monitoring topology, see [`docs/arch
 
 ## Project status
 
-Active development.
+Active development. Implemented and tested: the full decision loop
+(deterministic planner, immutable versions, signal-driven replanning,
+provenance, outcome tracking), CLI + REST API + MCP server (stdio and
+streamable HTTP), BYOK planners (Anthropic, OpenAI, DeepSeek) and multi-model
+strategies, domain packs (generic, investing, growth, career) with the
+investing numeric scorer, point-in-time market data with real vendors behind
+BYOK, backtesting and confidence calibration, external data sources,
+webhooks, Postgres persistence with ordered migrations, Prometheus metrics +
+Grafana dashboards, a minimal Next.js admin UI, table-driven tests with
+`-race`, GitHub Actions CI.
 
-The initial core is implemented and tested:
-
-* deterministic planner
-* domain model
-* CLI
-* REST API
-* immutable plan versions
-* signal-driven replanning
-* provenance
-* outcome tracking
-* table-driven tests with `-race`
-* Postgres persistence with ordered migrations
-* Prometheus metrics + Grafana dashboards
-* a minimal Next.js admin UI
-* webhook event notifications
-* an MCP server (stdio + streamable HTTP)
-
-More LLM providers, local / self-hosted inference, authentication, richer scoring, OpenTelemetry, and deeper admin workflows are planned next.
-
----
-
-## Roadmap
-
-* [x] Core domain model
-* [x] Deterministic mock planner
-* [x] CLI evaluation flow
-* [x] In-memory repository
-* [x] Postgres repository
-* [x] Ordered migrations
-* [x] Immutable plan versions
-* [x] Signal-driven replanning
-* [x] Outcome tracking
-* [x] REST API
-* [x] Table-driven tests
-* [x] GitHub Actions CI
-* [x] Prometheus metrics + Grafana dashboards
-* [x] Minimal admin UI
-* [x] Application/use-case layer with concurrency-safe replanning
-* [x] Pluggable LLM planners: Anthropic Claude, OpenAI, and DeepSeek (structured output via tool/function calls)
-* [x] Multi-model strategies: cross-model verify, cost routing, agreement ensemble (provenance-tracked)
-* [x] Multi-domain support (per-goal domain + pack registry + planner router)
-* [x] Domain packs and examples (generic, investing, growth, career)
-* [x] Investing pack: numeric scoring planner + point-in-time market data + backtesting
-* [x] Config-as-data policy (per-domain scoring/materiality tunables)
-* [x] Async, FIFO-per-plan replanning + durable signal status + plan cache (TTL for finance)
-* [x] Per-domain metrics
-* [x] Pluggable external data sources (HTTP/MCP/AI-agent/read-model; deterministic pre-fetch, provenance-tracked)
-* [x] Webhook event notifications (best-effort, HMAC-signed, retried)
-* [x] MCP server (stdio via `dde mcp` + streamable HTTP at `/mcp`)
-* [ ] Local / self-hosted LLM inference (OpenAI-compatible endpoint, provider TBD)
-* [x] Real market-data vendors (FMP + keyless Stooq, vendor chain with fallback, TTL cache, rate limiting; BYOK)
-* [ ] OpenTelemetry tracing
-* [ ] Authentication / authorization
+Planned next: local / self-hosted LLM inference (OpenAI-compatible endpoint),
+OpenTelemetry tracing, authentication / authorization.
 
 ---
 
